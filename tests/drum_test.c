@@ -642,6 +642,7 @@ static void lane_budget(void)
     static const uint8_t KIT[6] = {36, 38, 39, 42, 45, 56};
     static const uint8_t TOM[4] = {41, 43, 45, 47};
     uint32_t i, p, owner, kills, bad = 0;
+    voice_budget = NVOICE;                               /* (the scenario fills 8; NightShift's budget is 16) */
     host_tracks_init();
     memset(eng_mem, 0, sizeof eng_mem);
     for (p = 0; p < NPART; p++)
@@ -683,6 +684,7 @@ static void lane_budget(void)
     fails += bad != 0;
     for (p = 0; p < NPART; p++)
         memset(trk[p].v, 0, sizeof trk[p].v);
+    voice_budget = VOICE_BUDGET;
 }
 
 /* #97: each lane's LEVEL (P_LN0..P_LN7): 100 % plays as before (bit for bit), 50 % about -12 dB (square law), 0 %

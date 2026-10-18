@@ -4,7 +4,7 @@
  * Runs in the audio ISR.
  *
  * Each synth part has its own NVOICE voices (so MONO / LEGATO / UNISON keep using
- * v[0..]), but only NVOICE of all the parts' voices sound at once: a part that starts
+ * v[0..]), but only VOICE_BUDGET (NightShift: 16; Felucca 8) of all the parts' voices sound at once: a part that starts
  * a voice while the budget is full takes one from any part (voice_victim): the oldest
  * released voice, else the oldest extra UNISON voice, else the oldest held voice of a
  * POLY part that is not its lowest note. A voice taken from another part fades out
@@ -12,6 +12,7 @@
  * declicks it); one of the part's own is restarted in place, as before. Extra UNISON
  * voices only start when there is room. */
 static uint32_t vage;                                   /* voice ages: one clock for every part */
+static uint32_t voice_budget = VOICE_BUDGET;            /* sounding voices of all parts together (host tests lower it) */
 static int32_t lfo_wave(track_t *t, uint32_t ph)
 {
     switch (t->p[P_LWAVE]) {
@@ -134,7 +135,7 @@ static uint32_t voice_victim(const track_t *self, int soft, track_t **pp)
             else if (!soft && t != self)
                 c = 4;                                  /* NightShift: another part's protected voice (its bass or
                                                          * its MONO note), the last resort: with eight parts every
-                                                         * one of the NVOICE can be protected */
+                                                         * one of the voices can be protected */
             else
                 continue;
             if (c < cat || (c == cat && v->age < (*pp)->v[best].age)) {
@@ -160,7 +161,7 @@ static int voice_room(track_t *t, int soft)
 {
     track_t *vp = 0;
     uint32_t k;
-    if (voices_busy() < NVOICE)
+    if (voices_busy() < voice_budget)
         return 1;
     k = voice_victim(t, soft, &vp);
     if (k == NVOICE)
@@ -199,7 +200,7 @@ static voice_t *voice_alloc(track_t *t, uint32_t note)
             return voice_reuse(t, &t->v[i]);
         nfree += !t->v[i].active;
     }
-    if (nfree && voices_busy() >= NVOICE) {
+    if (nfree && voices_busy() >= voice_budget) {
         track_t *vp = 0;
         uint32_t k = voice_victim(t, 0, &vp);
         if (k < np && vp == t)

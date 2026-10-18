@@ -2,13 +2,14 @@
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
 /* FELUCCA core types: tracks, voices, engines, parameters.
  * NightShift: eight tracks (Felucca has four), each a synth part: its own engine, preset, parameters, voices and 64-step
- * pattern. The parts share one budget of NVOICE sounding voices (voice.c). Drums are the DRUM
+ * pattern. The parts share one budget of VOICE_BUDGET sounding voices (voice.c). Drums are the DRUM
  * engine (General MIDI map) on any part; the SAMPLE engine's PERC set is retired (drum_from_perc).
  * Sections: sizes, parameters, voices and engines, tracks and the song, system. */
 #include <stdint.h>
 
 /* ------------------------------------------------------------ sizes --- */
-#define NVOICE 8                 /* voices per part, and the budget shared by all parts */
+#define NVOICE 8                 /* voice slots per part */
+#define VOICE_BUDGET 16u         /* NightShift: sounding voices of all the parts together (Felucca: NVOICE, 8) */
 #define NPART 8                  /* synth parts: tracks 1..8 (NightShift; Felucca: 4) */
 #define NTRK NPART               /* tracks: every track is a part */
 #define NTRK_V4 4u               /* the tracks of every stored format up to FUN10 (and of Felucca's editor protocol): a

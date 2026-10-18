@@ -299,7 +299,7 @@ static int tracks_demo(const char *dir, const char *name, uint32_t solo)
     }
     fclose(w);
     if (solo)
-        return bmax > NVOICE;
+        return bmax > VOICE_BUDGET;
     {
         const step_t *s4 = &td->step[4], *l1 = &t3->step[1], *p14 = &t2->step[14];
         /* (DRUM: the clap goes into the grid, its lane's hit, seq.c; a sampled kit took it as a 4th note) */
@@ -313,8 +313,8 @@ static int tracks_demo(const char *dir, const char *name, uint32_t solo)
         printf("tracks: recording: MIDI ch 3 -> lead step 1 = %u (want 84) %s; keys -> pad step 14 = %u notes %u %u %s\n",
                l1->note[0], ok_lead ? "ok" : "FAIL", p14->n, p14->note[0], p14->note[1], ok_keys ? "ok" : "FAIL");
         printf("tracks: voices sounding at most %u (budget %u) %s; given up to another part %u; %u samples near full "
-               "scale\n", bmax, NVOICE, bmax <= NVOICE ? "ok" : "FAIL", voice_kills - kills0, clips);
-        fail = !ok_clap + !ok_lead + !ok_keys + (bmax > NVOICE) + (clips > 0);
+               "scale\n", bmax, VOICE_BUDGET, bmax <= VOICE_BUDGET ? "ok" : "FAIL", voice_kills - kills0, clips);
+        fail = !ok_clap + !ok_lead + !ok_keys + (bmax > VOICE_BUDGET) + (clips > 0);
     }
     return (int)fail;
 }
@@ -397,6 +397,7 @@ static int steal_test(const char *dir)
     snprintf(path, sizeof path, "%s/steal.wav", dir);
     if (!L || !(w = fopen(path, "wb")))
         return 1;
+    voice_budget = NVOICE;                         /* (7 + 1 notes fill 8; NightShift's 16 is checked by regress.c) */
     host_tracks_init();
     for (p = 0; p < NPART; p++) {
         track_t *t = &trk[p];
@@ -822,7 +823,7 @@ static int tracks_test(const char *dir)
                four_full / worst);
         printf("tracks: two VOICE parts, 4 + 4 voices (the heaviest 8 the budget allows): %.1f ns (%.2f x); "
                "no notes but the drums (buses, 3 idle parts): %.1f ns\n", two_voice, two_voice / worst, none);
-        if (bm > NVOICE || bm2 > NVOICE || bm3 > NVOICE)
+        if (bm > VOICE_BUDGET || bm2 > VOICE_BUDGET || bm3 > VOICE_BUDGET)
             fail++;
     }
     printf("tracks: %s\n", fail ? "FAILED" : "all checks ok");

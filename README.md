@@ -33,9 +33,11 @@ loaded in a browser, but no install has been run on a real FM-1.
 
 **The limits — read these:**
 
-- **The voice budget is still 8 voices** shared by all tracks (as Felucca's four). Eight busy tracks steal voices
-  from each other; a held pad on one track can cut notes on another. CPU headroom for eight tracks on the device
-  is unmeasured.
+- **16 voices** (Felucca: 8) are shared by all tracks; each track still holds up to 8 of them (a chord or UNISON
+  stack on one track is capped at 8). When all 16 sound, a new note takes the oldest released voice, else an extra
+  UNISON voice, else a held note that is not a track's lowest. Doubling the voices doubles the worst-case CPU:
+  it has not been measured on an FM-1. If the sound breaks up, the firmware's overload guard drops voices
+  (MENU > SYSTEM > INFO shows the CPU load); mute tracks or use lighter engines (SAMPLE, LOFI, DRUM) on the busy ones.
 - **PHYS and GRAIN run on T1..T4 only** (RAM: their engine memory is 12.9 KB a track); T5..T8 skip them.
 - **SLICER STUT** has four shared buffers: at most four tracks stutter at once.
 - **USR3 holds 40 KiB** (Felucca: 80): the upper half of its flash keeps tracks 5..8 of the projects and the
@@ -86,7 +88,7 @@ Multi-engine synthesizer firmware for the M-VAVE FM-1. Please report what you fi
 - **Thirteen engines** (below), each with its own factory presets; every factory sound has a category (BASS, LEAD,
   PAD, PLUCK, KEYS, DRUM, FX, OTHER) to browse by
 - **Four tracks**, one synth part each with its own engine and sound (drums are the DRUM engine);
-  8 voices shared between them. ALGORITHM selects the track on every page
+  16 voices shared between them (NightShift: eight tracks). ALGORITHM selects the track on every page
 - **Sequencer:** 64 steps per track with chords, ties, accent, slide, per-step chance, velocity and ratchets
   (a step played 2, 3 or 4 times in its length); a piano roll of the steps, where KNOB 3 sets a note's length; a drum grid (white keys =
   steps, black keys = lanes); automation: recording of knob moves per step (an automation icon marks the cards it

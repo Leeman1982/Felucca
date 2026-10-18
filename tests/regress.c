@@ -18,7 +18,7 @@
  *    per sample counted by the kernel (proc_pid_rusage ri_instructions: the same on every run within
  *    ~1 %, unlike wall time), compared with CPU_FILE (tests/cpu_baseline.txt) at +-25 %; ns per
  *    sample printed for information. A count over the budget fails, one far under it only warns.
- * 4. voices: the shared budget of 8 across 4 parts, stolen voices fade (no step), MONO / LEGATO /
+ * 4. voices: the shared budget of 16 (NightShift; 8 in the older scenarios) across 4 parts, stolen voices fade (no step), MONO / LEGATO /
  *    UNISON keep their note under pressure, the VOICE engine's 4-voice cap, release frees voices, and
  *    no hanging note after the note-offs on any routing (USB channels 1..4, others while the
  *    selected track changes, the keys while the selected track changes, with ARP and the voice modes).
@@ -517,13 +517,14 @@ static int chk_budget(char *msg, uint32_t n)
     finish();
     snprintf(msg, n, "4 POLY parts, random notes: at most %u voices active (budget %u), VOICE part at most %u (cap 4), "
              "%u voices taken, %u still fading after their block, all free %.2f s after the note-offs",
-             worst, NVOICE, vworst, voice_kills - kills0, fading, R.free_s);
-    return worst <= NVOICE && vworst <= 4u && !fading && R.free_s >= 0 && voice_kills > kills0;
+             worst, VOICE_BUDGET, vworst, voice_kills - kills0, fading, R.free_s);
+    return worst <= VOICE_BUDGET && vworst <= 4u && !fading && R.free_s >= 0 && voice_kills > kills0;
 }
 
 /* MIDI packets in one audio block can reuse a voice before its stolen tail fades. */
 static int chk_retrigger_budget(char *msg, uint32_t n)
 {
+    voice_budget = NVOICE;                              /* (a scenario that fills 8: NightShift's own is 16, chk_sixteen) */
     static const uint8_t NOTES[4] = {48, 52, 55, 60};
     uint32_t round, p, i, bad = 0, worst = 0;
     for (round = 0; round < 2u; round++) {
@@ -569,6 +570,7 @@ static int chk_retrigger_budget(char *msg, uint32_t n)
 /* Voices held before a mode change must remain reclaimable except for the lead. */
 static int chk_cap_mode_budget(char *msg, uint32_t n)
 {
+    voice_budget = NVOICE;                              /* (a scenario that fills 8: NightShift's own is 16, chk_sixteen) */
     static const uint8_t MODE[3] = {V_MONO, V_LEGATO, V_UNISON};
     uint32_t round, p, i, bad = 0, worst = 0;
     for (round = 0; round < NELEM(MODE); round++) {
@@ -627,6 +629,7 @@ static int rg_gate(const track_t *t, uint32_t note)
 }
 static int chk_eight_leads(char *msg, uint32_t n)
 {
+    voice_budget = NVOICE;                              /* (a scenario that fills 8: NightShift's own is 16, chk_sixteen) */
     uint32_t p, i, bad = 0, busy;
     host_tracks_init();
     for (p = 0; p < NPART; p++) {
@@ -657,9 +660,46 @@ static int chk_eight_leads(char *msg, uint32_t n)
     return bad == 0;
 }
 
+/* NightShift: the budget is 16. Two POLY parts hold eight notes each: all sixteen sound, nothing is taken (a Felucca
+ * budget of 8 would have); a seventeenth note, on a third part, takes the oldest held note that is not a bass
+ * (never part 1's or part 2's lowest) and sounds; released, everything frees */
+static int chk_sixteen(char *msg, uint32_t n)
+{
+    uint32_t p, i, bad = 0, kills0, busy;
+    host_tracks_init();
+    for (p = 0; p < 3u; p++) {
+        memset(trk[p].v, 0, sizeof trk[p].v);
+        host_preset(&trk[p], 0, 0);
+        trk[p].p[P_VOICE] = V_POLY;
+        trk[p].p[P_AMODE] = 0;
+        trk[p].p[P_SUS] = 127;
+    }
+    kills0 = voice_kills;
+    for (i = 0; i < NVOICE; i++) {
+        trk_note_on(&trk[0], 40u + 2u * i, 100);
+        trk_note_on(&trk[1], 41u + 2u * i, 100);
+    }
+    blk();
+    busy = voices_busy();
+    bad += busy != 16u || voice_kills != kills0;
+    trk_note_on(&trk[2], 90, 100);
+    blk();
+    bad += voices_busy() > VOICE_BUDGET || !rg_gate(&trk[2], 90) || voice_kills != kills0 + 1u;
+    bad += !rg_gate(&trk[0], 40) || !rg_gate(&trk[1], 41);
+    for (p = 0; p < 3u; p++)
+        trk_all_off(&trk[p]);
+    for (i = 0; i < 4u * FS / CTL && !parts_free(); i++)
+        blk();
+    bad += !parts_free();
+    snprintf(msg, n, "NightShift's budget of %u: two POLY parts' 16 notes all sound (%u), a 17th takes one (not a bass), all free",
+             VOICE_BUDGET, busy);
+    return bad == 0;
+}
+
 /* A live mode change can leave an old chord in slots above the new lead. */
 static int chk_mode_budget(char *msg, uint32_t n)
 {
+    voice_budget = NVOICE;                              /* (a scenario that fills 8: NightShift's own is 16, chk_sixteen) */
     uint32_t mode, initial, p, i, bad = 0;
     for (initial = 0; initial < 2u; initial++)
         for (mode = V_MONO; mode <= V_UNISON; mode++) {
@@ -814,6 +854,7 @@ static int chk_sample_end(char *msg, uint32_t n)
  * within 1.5 x the largest one in the 0.25 s before it (a hard cut is several times larger) */
 static int chk_steal_fade(char *msg, uint32_t n)
 {
+    voice_budget = NVOICE;                              /* (a scenario that fills 8: NightShift's own is 16, chk_sixteen) */
     static const uint8_t N1[7] = {48, 52, 55, 59, 62, 65, 69};
     const uint32_t frames = 4u * FS;
     int32_t *L = calloc(frames + CTL, sizeof *L);
@@ -861,6 +902,7 @@ static int chk_steal_fade(char *msg, uint32_t n)
  * flood the budget with new notes for 2 s; part 1's voice 0 must sound note 40, gate on, every block */
 static int chk_keep(char *msg, uint32_t n, uint32_t mode)
 {
+    voice_budget = NVOICE;                              /* (a scenario that fills 8) */
     static const char *const MN[4] = {"POLY", "MONO", "LEGATO", "UNISON"};
     uint32_t k, lost = 0, kills0 = voice_kills;
     host_tracks_init();
@@ -1122,11 +1164,12 @@ int main(int argc, char **argv)
 
     /* 4: the voice checks */
     k0 = nj;
-    add(J_CHECK, "voices: budget of 8 across 4 parts")->check = chk_budget;
+    add(J_CHECK, "voices: budget of 16 across 4 parts")->check = chk_budget;
     add(J_CHECK, "voices: reuse before the stolen tail fades")->check = chk_retrigger_budget;
     add(J_CHECK, "voices: budget after a live mode change")->check = chk_mode_budget;
     add(J_CHECK, "voices: budget after voice mode changes")->check = chk_cap_mode_budget;
     add(J_CHECK, "voices: eight leads (NightShift)")->check = chk_eight_leads;
+    add(J_CHECK, "voices: sixteen voices (NightShift)")->check = chk_sixteen;
     add(J_CHECK, "voices: note-offs after live voice mode changes")->check = chk_mode_release;
     add(J_CHECK, "samples: high-rate one-shot ends")->check = chk_sample_end;
     add(J_CHECK, "voices: a stolen voice fades")->check = chk_steal_fade;
@@ -1227,8 +1270,8 @@ int main(int argc, char **argv)
         if (r->tail_peak > LIM_TAIL)
             snprintf(why + strlen(why), sizeof why - strlen(why), " not silent at the end: peak %d (limit %d);",
                      r->tail_peak, LIM_TAIL);
-        if (r->vmax > NVOICE)
-            snprintf(why + strlen(why), sizeof why - strlen(why), " %u voices (budget %u);", r->vmax, NVOICE);
+        if (r->vmax > VOICE_BUDGET)
+            snprintf(why + strlen(why), sizeof why - strlen(why), " %u voices (budget %u);", r->vmax, VOICE_BUDGET);
         if (why[0]) {
             printf("regress: HEALTH FAIL  %s:%s\n", j->name, why);
             h_fail++;
