@@ -190,11 +190,12 @@ int main(int argc, char **argv)
         const smp_set_t *s = &SMP_SETS[0];
         const smp_zone_t *z = &SMP_ZONES[s->z0];
         uint32_t bytes = 0, ok = s->nz == 5u;
-        check("PIANO: SET 0, its aliases 1 and 4 the same zones; FLUTE 2, SAX 3, USR1..3 5..7; 4 presets",
-              SMP_NSETS == 5u && str_eq(SMP_SETS[0].name, "PIANO") && SMP_SETS[1].z0 == s->z0 && SMP_SETS[4].z0 == s->z0 &&
+        check("PIANO: SET 0, its aliases 1 and 4 the same zones; FLUTE 2, SAX 3, USR1..3 5..7; 4 presets first (NightShift: Open Samples' after)",
+              SMP_NBASE == 5u && str_eq(SMP_SETS[0].name, "PIANO") && SMP_SETS[1].z0 == s->z0 && SMP_SETS[4].z0 == s->z0 &&
               SMP_SETS[1].nz == s->nz && SMP_SETS[4].nz == s->nz && str_eq(SMP_SETS[2].name, "FLUTE") &&
-              str_eq(SMP_SETS[3].name, "SAX") && str_eq(SMP_ALL_NAMES[5], "USR1") && ENG_SAMPLE.edit[0].max == 7 &&
-              ENG_SAMPLE.npresets == 4u);
+              str_eq(SMP_SETS[3].name, "SAX") && str_eq(SMP_ALL_NAMES[5], "USR1") && ENG_SAMPLE.edit[0].max == 7 + SMP_NOS &&
+              ENG_SAMPLE.npresets == SMP_NPRESETS && str_eq(ENG_SAMPLE.presets[3].name, "SAX") &&
+              (!SMP_NOS || (SMP_NPRESETS == 10u && str_eq(ENG_SAMPLE.presets[5].name, "101 BASS"))));
         for (i = 0; ok && i < 5u; i++) {
             bytes += (z[i].n + 1u) / 2u;
             ok &= z[i].rate == 32768u && z[i].root16 == ROOT[i] * 16u && z[i].lo == LO[i] && z[i].hi == HI[i] &&
@@ -250,7 +251,7 @@ int main(int argc, char **argv)
             return 1;
         for (i = 0; i < sizeof NOTES; i++) {
             render_child(0, NOTES[i], ref);
-            render_child((int16_t)SMP_NSETS, NOTES[i], usr);
+            render_child((int16_t)SMP_NBASE, NOTES[i], usr);
             memcpy(buf, usr, sizeof buf);
             same += !memcmp(ref, usr, sizeof buf) && rms(0, FS / 2u) > 100.0;
             snprintf(path, sizeof path, "piano_hd_%02u", NOTES[i]);

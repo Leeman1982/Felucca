@@ -113,7 +113,7 @@ static uint32_t lowest_held(const track_t *t)           /* index of the lowest h
  * Returns its index, *pp its part; NVOICE = none */
 static uint32_t voice_victim(const track_t *self, int soft, track_t **pp)
 {
-    uint32_t p, i, best = NVOICE, cat = 4;
+    uint32_t p, i, best = NVOICE, cat = 5;
     for (p = 0; p < NPART; p++) {
         track_t *t = &trk[p];
         uint32_t mode = trk_vmode(t);
@@ -131,6 +131,10 @@ static uint32_t voice_victim(const track_t *self, int soft, track_t **pp)
                 c = 2;                                  /* extra UNISON, or a voice left by a mode / cap change */
             else if (!soft && mode == V_POLY && i != low)
                 c = 3;                                  /* held, not the bass */
+            else if (!soft && t != self)
+                c = 4;                                  /* NightShift: another part's protected voice (its bass or
+                                                         * its MONO note), the last resort: with eight parts every
+                                                         * one of the NVOICE can be protected */
             else
                 continue;
             if (c < cat || (c == cat && v->age < (*pp)->v[best].age)) {
@@ -160,8 +164,8 @@ static int voice_room(track_t *t, int soft)
         return 1;
     k = voice_victim(t, soft, &vp);
     if (k == NVOICE)
-        return !soft;                                   /* hard: over the budget (cannot happen: each of the
-                                                         * NPART < NVOICE parts protects one voice at most) */
+        return !soft;                                   /* hard: over the budget (only when every voice is this
+                                                         * part's own protected one) */
     voice_kill(&vp->v[k]);
     return 1;
 }
@@ -480,7 +484,8 @@ static void engine_block(track_t *t)
             v->stage = 0;
             v->env = v->env_out = 0;
         }
-        t->engine = eng_idx(t->eng_req);
+        t->engine = eng_fits(t->eng_req, (uint32_t)(t - trk)) ? eng_idx(t->eng_req) : 0u;   /* (NightShift: PHYS,
+                                                         * GRAIN past track 4 never reach the ISR; if one did: ANALOG) */
         eng_mem_claim(t);                               /* its state region, before the waiting notes */
         t->xf_on = 0;
         t->nmono = 0;

@@ -81,6 +81,9 @@ static uint32_t up_gen;                      /* bumped on every user bank change
 enum { HV_SCOPE, HV_TRACKS, HV_LEVELS, HV_COUNT };
 static int home_tracks(void) { return ui_home_view == HV_TRACKS || ui_home_view == HV_LEVELS; }
 static int home_levels(void) { return ui_home_view == HV_LEVELS; }
+/* NightShift: the four tracks the panel's views of four show (MIXER, HOME TRACKS / LEVELS, GLO's knobs): the selected
+ * track's bank, T1..T4 or T5..T8 */
+static uint32_t trk_bank(void) { return song.sel >= 4u ? 4u : 0u; }
 enum { RP_CLICK, RP_LEVEL, RP_COUNTIN };
 static uint32_t rp_get(uint32_t f)                     /* a field as the MENU steps it: 0..2 */
 {
@@ -1125,7 +1128,7 @@ static int param_kept(uint32_t i)
  * (SAMPLE 4, once PERC, is past SMP_NPRESETS: apply_preset_to loads it as DRUM) */
 static uint32_t preset_orig(const engine_t *e, uint32_t k)
 {
-    return e->presets == SMP_PRESET_TABLE && k < SMP_NSETS ? SMP_SET_ORIG[k] : k;
+    return e->presets == SMP_PRESET_TABLE && k < NELEM(SMP_PRESET_ORIG) ? SMP_PRESET_ORIG[k] : k;
 }
 
 /* the presets of engine e that browsing shows before preset k (k = npresets: all of them) */
@@ -1237,6 +1240,10 @@ static void set_engine_of(track_t *t, uint32_t ei)
 {
     const engine_t *e = ENGINES[ei % NENGINES];
     uint32_t i;
+    if (!eng_fits(ei % NENGINES, trk_index(t))) {     /* NightShift: PHYS, GRAIN on tracks 1..4 (engines.c) */
+        ui_say(e->name, " T1-T4 ONLY");
+        return;
+    }
 #if !FELUCCA_FM4
     if (ei % NENGINES == ENGI_DIGITAL) {             /* DIGITAL (retired): its first preset, as FM6 */
         fm4_load_preset(t, 0);
@@ -1324,8 +1331,12 @@ static uint32_t sound_cat(uint32_t e, uint32_t k) { return e == NENGINES ? up_ca
 static int list_keep(uint32_t e, uint32_t k)
 {
     uint32_t m = list_mode();
+    if (!eng_fits(e == NENGINES ? up_engine(k) : e, trk_index(TSEL)))
+        return 0;                                        /* NightShift: no PHYS, GRAIN on tracks 5..8 */
     return m == 1u ? favorite_has(e, k) : m ? sound_cat(e, k) == m - 1u : 1;
 }
+/* the list is the whole of preset_all_at (ALL on a track every engine fits) */
+static int list_all(void) { return !list_mode() && trk_index(TSEL) < NPART_BIG; }
 /* the category of the sound track t plays: its user preset's, else its factory preset's (the NAME screen's default) */
 static uint32_t track_cat(const track_t *t)
 {
@@ -1336,7 +1347,7 @@ static uint32_t track_cat(const track_t *t)
 static uint32_t preset_pos(uint32_t *total)
 {
     uint32_t all, current = preset_all_pos(&all), n = 0, pos = 0xFFFFFFFFu;
-    if (!list_mode()) { *total = all; return current; }
+    if (list_all()) { *total = all; return current; }
     for (uint32_t i = 0; i < all; i++) {
         uint32_t k, e = preset_all_at(i, &k);
         if (!list_keep(e, k)) continue;
@@ -1349,7 +1360,7 @@ static uint32_t preset_pos(uint32_t *total)
 static uint32_t preset_at(uint32_t n, uint32_t *k)
 {
     uint32_t all;
-    if (!list_mode()) return preset_all_at(n, k);
+    if (list_all()) return preset_all_at(n, k);
     preset_all_pos(&all);
     for (uint32_t i = 0; i < all; i++) {
         uint32_t e = preset_all_at(i, k);
@@ -1471,7 +1482,7 @@ static uint32_t preset_visible(uint32_t cur, uint32_t total, uint32_t row)
 
 /* HOME: the track KNOB k edits (MENU > HOME LEVELS, 1.5: track k; else the selected one) and what: the engine's four
  * main parameters, or (LEVELS) the track's LEVEL, as the GLO layer's knobs */
-static track_t *home_trk(uint32_t k) { return home_levels() ? &trk[k & 3u] : TSEL; }
+static track_t *home_trk(uint32_t k) { return home_levels() ? &trk[trk_bank() + (k & 3u)] : TSEL; }
 static const param_desc_t *home_param(uint32_t k, int16_t **vp)
 {
     uint32_t id = home_levels() ? (uint32_t)P_LEVEL : ENGINES[TSEL->eng_req % NENGINES]->knob[k & 3u];
@@ -1484,6 +1495,8 @@ static void track_select(uint32_t i)
 {
     if (i >= NTRK || i == song.sel)
         return;
+    if ((i >= 4u) != (song.sel >= 4u))
+        ui.force = 1;                                /* (the other bank of four: MIXER, HOME TRACKS redraw whole) */
     song.sel = (uint8_t)i;
     ui.entry_open = 0;
     ui.hot_t = 0;

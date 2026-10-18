@@ -11,7 +11,7 @@
 Each file becomes one zone: mono, 22050 Hz, IMA ADPCM (sampleio.py, the same encoder
 as the built-in sets and the web editor). ROOT is a MIDI note (default: from the file
 name, C4 = 60, else 60); without LO-HI the zones split the keyboard between their roots.
-A slot holds 80 KiB (about 7 s at 22050 Hz). Protocol: web/EDITOR_PROTOCOL.md, cmds 11..15.
+A slot holds 80 KiB (about 7 s at 22050 Hz); NightShift's USR3 40 KiB (about 3.7 s). Protocol: web/EDITOR_PROTOCOL.md, cmds 11..15.
 Needs mido (and a backend such as python-rtmidi) for the device commands.
 """
 import sys
@@ -39,6 +39,8 @@ def slot_info(r):
             j = r.index(0, i + 1)
             out.append(f"USR{k + 1}: {'empty' if not nz else f'{nz} zones, {printable(r[i + 1:j])}, {r[j + 1]} KiB'}")
             i = j + 2
+        for k in range(n if len(r) >= i + n else 0):   # NightShift: each slot's room after the slots
+            out[k] += f" (room {r[i + k]} KiB)"
         return out
     except (IndexError, ValueError):
         raise ValueError("malformed SMP_INFO reply from the device") from None
@@ -133,6 +135,8 @@ def main():
     if cmd == "erase":
         print("erase:", "ok" if link.req(14, [slot], 10)[1] == 0 else "FAILED")
         return
+    if len(data) > sio.SLOT_ROOM[slot] - sio.SLOT_DATA_OFF:
+        sys.exit(f"USR{slot + 1} holds {sio.SLOT_ROOM[slot] - sio.SLOT_DATA_OFF} B of ADPCM, this is {len(data)} B")
     print(f"USR{slot + 1} {sys.argv[3]}: {len(data)} B ADPCM, {hdr[6]} zones")
     if link.req(11, [slot])[1]:
         sys.exit("begin failed")

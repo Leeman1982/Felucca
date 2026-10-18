@@ -461,6 +461,10 @@ static int up_load(uint32_t k)
     if (!up_used(k))
         return 1;
     r = up_rec(k);
+    if (!eng_fits(up_engine(k), song.sel)) {            /* NightShift: PHYS, GRAIN on tracks 1..4 */
+        ui_say(ENGINES[up_engine(k)]->name, " T1-T4 ONLY");
+        return 1;
+    }
     up_values(r, v);
     load_begin(t, UNDO_SOUND);                          /* (ui.c: the copy for SAVE held = undo) */
     panic_req |= (uint8_t)(1u << song.sel);

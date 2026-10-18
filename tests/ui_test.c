@@ -485,9 +485,13 @@ static int test_sound_loads(void)
     project_load(1);
     bad += check("a project load drops the copy and takes none", undo.trk == 0 && undo_depth == 0);
     ui_power_on();
-    bad += check("SAMPLE factory browsing has four melodic presets and no PERC",
-                 ENGINES[4]->npresets == 4u && str_eq(ENGINES[4]->presets[0].name, "PIANO") &&
-                 str_eq(ENGINES[4]->presets[3].name, "SAX"));
+    bad += check("SAMPLE factory browsing: four melodic presets, no PERC, then NightShift's five (Open Samples)",
+                 ENGINES[4]->npresets == 10u && str_eq(ENGINES[4]->presets[0].name, "PIANO") &&
+                 str_eq(ENGINES[4]->presets[3].name, "SAX") && preset_orig(ENGINES[4], SMP_SET_PERC) != SMP_SET_PERC &&
+                 str_eq(ENGINES[4]->presets[SMP_PRE_BASS].name, "101 BASS") &&
+                 str_eq(ENGINES[4]->presets[SMP_PRE_STR].name, "JUNO STR") &&
+                 str_eq(ENGINES[4]->presets[9].name, "SLOW STR") && preset_shown(4u) == 8u &&
+                 str_eq(ENGINES[ENGI_DRUM]->presets[DRUM_PRE_LINN].name, "LINN KIT"));
     {   /* TRANH (SET 1, preset 1) is gone: both are PIANO aliases, kept for old data, never offered */
         const param_desc_t *sd = &ENGINES[4]->edit[0];
         uint32_t all, pos, k, e, pos0, shown = 0;
@@ -503,14 +507,15 @@ static int test_sound_loads(void)
         apply_preset_to(TSEL, 1);
         bad += check("SAMPLE: old SET 1 / preset 1 (TRANH) play PIANO; browsing and knobs skip them",
                      SMP_SETS[1].z0 == SMP_SETS[0].z0 && SMP_SETS[1].nz == SMP_SETS[0].nz && pos == pos0 &&
-                     shown == 3u && e == 4u && k == 2u && TSEL->preset == 0u && TSEL->p[P_E0] == 0 &&
+                     shown == 8u && e == 4u && k == 2u && TSEL->preset == 0u && TSEL->p[P_E0] == 0 &&
                      str_eq(sd->names[1], "PIANO") && enum_step(sd, 0, 1) == 2 && enum_step(sd, 2, 1) == 0 &&
                      enum_step(sd, 1, 2) == 2 && enum_orig(sd, 1) == 0 && enum_orig(sd, 5) == 5 &&
                      enum_orig(&ENGINES[8]->edit[0], 1) == 0);
         bad += check("SAMPLE / GRAIN SET 4 (PERC, retired): a PIANO alias, knobs skip it, USR1..3 stay 5..7",
                      str_eq(sd->names[SMP_SET_PERC], "PIANO") && enum_orig(sd, SMP_SET_PERC) == 0 &&
                      enum_step(sd, 3, 4) == 5 && enum_step(sd, 5, 4) == 3 && str_eq(sd->names[5], "USR1") &&
-                     str_eq(sd->names[7], "USR3") && sd->max == 7 &&
+                     str_eq(sd->names[7], "USR3") && sd->max == 11 && str_eq(sd->names[8], "101 BASS") &&
+                     str_eq(sd->names[11], "LINN") && enum_step(sd, 7, 8) == 8 && enum_orig(sd, 9) == 9 &&
                      enum_orig(&ENGINES[8]->edit[0], SMP_SET_PERC) == 0 && SMP_SETS[SMP_SET_PERC].z0 == SMP_SETS[0].z0);
     }
     host_legacy_sample_perc(t);                /* SAMPLE PERC (SET 4, retired after 1.0.2): every load gives DRUM */
@@ -567,7 +572,7 @@ static int test_sound_loads(void)
     legacy.magic = PROJ_MAGIC_V6; legacy.size = sizeof legacy;
     legacy.parts = 0; legacy.phys = PROJ_PHYS;
     memcpy(legacy.g, decoded.g, sizeof legacy.g);
-    for (uint32_t ti = 0; ti < NTRK; ti++) {
+    for (uint32_t ti = 0; ti < NTRK_V4; ti++) {
         memcpy(legacy.t[ti].p, decoded.t[ti].p, 61u * sizeof(int16_t));
         memcpy(legacy.t[ti].p + 61, decoded.t[ti].p + P_E0, 8u * sizeof(int16_t));
         legacy.t[ti].engine = decoded.t[ti].engine; legacy.t[ti].preset = decoded.t[ti].preset;
@@ -1813,9 +1818,9 @@ static int test_menu_project_rows(void)
     turn(EN_K4, -31); ok &= song.g[G_TUNE] == 19;
     bad += check("MENU > AUDIO > TUNE: the project's G_TUNE, -50 .. +50 cents (OCT one, a knob as far as it turned)", ok);
     ui.menu_sel = MI_MIDIIN;
-    ok = menu_tab() == MTAB_MIDI && song.g[G_ROUTE] == 0 && str_eq(menu_vname(MI_MIDIIN, menu_get(MI_MIDIIN)), "CH1-4");
+    ok = menu_tab() == MTAB_MIDI && song.g[G_ROUTE] == 0 && str_eq(menu_vname(MI_MIDIIN, menu_get(MI_MIDIIN)), "CH1-8");
     press(B_OCTUP); ok &= song.g[G_ROUTE] == 1;
-    turn(EN_K1, 1); turn(EN_K1, 1); ok &= song.g[G_ROUTE] == 3 && str_eq(menu_vname(MI_MIDIIN, menu_get(MI_MIDIIN)), "CH9-12");
+    turn(EN_K1, 1); turn(EN_K1, 1); ok &= song.g[G_ROUTE] == 3 && str_eq(menu_vname(MI_MIDIIN, menu_get(MI_MIDIIN)), "CH9-16");
     bad += check("MENU > MIDI > MIDI IN: the project's G_ROUTE (ROUT), its names", ok);
     menu_close();
     settings_export(&p1);
@@ -2315,7 +2320,7 @@ static int test_chain(void)
     chain_defaults(&chain_config);
     project_load(2);
     bad += check("SONG rows saved and loaded with their project", chain_config.count == 2 &&
-        chain_config.row[0].repeat == 2 && !memcmp(&chain_config.row[1], &(chain_row_t){{1, 1, 1, 1}, 1}, sizeof(chain_row_t)));
+        chain_config.row[0].repeat == 2 && !memcmp(&chain_config.row[1], &(chain_row_t){{1, 1, 1, 1, 1, 1, 1, 1}, 1}, sizeof(chain_row_t)));
     song.rec = 3;
     bad += check("SONG prepares while stopped, no starts over a pending start", chain_prepare() == 0 && chain_prepare() == 2);
     events_block(n);
@@ -2378,10 +2383,10 @@ static int test_chain(void)
     bad += check("SONG K2 picks the lane (T3), K3 runs A..D then - (silent)", ui.song_trk == 2 &&
                  !memcmp(&chain_config.row[1], &(chain_row_t){{1, 0, CHAIN_SILENT, 0}, 3}, sizeof(chain_row_t)));
     turn(EN_K2, 9); turn(EN_K3, -2);
-    bad += check("SONG K2 stays in T1..T4, K3 back from - to C", ui.song_trk == 3 && chain_config.row[1].slot[3] == 0 &&
-                 chain_config.row[1].slot[2] == CHAIN_SILENT);
+    bad += check("SONG K2 stays in T1..T8 (NightShift), K3 back from A stays A", ui.song_trk == 7 &&
+                 chain_config.row[1].slot[7] == 0 && chain_config.row[1].slot[2] == CHAIN_SILENT);
     turn(EN_K3, 2);
-    bad += check("  .. on T4: C", chain_config.row[1].slot[3] == 2);
+    bad += check("  .. on T8: C", chain_config.row[1].slot[7] == 2);
     ui.song_trk = 1;
     k = key_at(0, 3);                                /* B3: the white key place 3, slot B; held over an audio block */
     fm1_in.notes |= 1u << k; host_notes |= 1u << k; frame(); events_block(32);
@@ -2396,7 +2401,7 @@ static int test_chain(void)
     bad += check("SONG: the other keys play as anywhere", ok && chain_config.row[1].slot[1] == 1);
     turn(EN_K1, 1); tap_key(key_at(0, 4));           /* (C4 on + ADD: a copy of section 2, its T2 on C) */
     bad += check("SONG white key C (C4) on + ADD adds a section, a copy with the cell on C", chain_config.count == 3 &&
-                 !memcmp(&chain_config.row[2], &(chain_row_t){{1, 2, CHAIN_SILENT, 2}, 3}, sizeof(chain_row_t)));
+                 !memcmp(&chain_config.row[2], &(chain_row_t){{1, 2, CHAIN_SILENT, 0, 0, 0, 0, 2}, 3}, sizeof(chain_row_t)));
     chain_config.count = 2; ui.song_row = 1; ui.song_trk = 0;
     turn(EN_K4, 30);
     project_save(0);
@@ -3274,7 +3279,7 @@ static int test_layer(void)
             ok &= i == 1u || ((a ^ b2) >> white(i)) & 1u;
         for (i = 12; i < 16u; i++)                                    /* D5 .. G5: no effect, dark */
             ok &= !((a | b2) >> white(i) & 1u);
-        ok &= ((a ^ b2) >> key_at(1, 0)) & 1u && !((a | b2) >> key_at(1, 4) & 1u);   /* a mute breathes, a spare black dark */
+        ok &= ((a ^ b2) >> key_at(1, 0)) & 1u && ((a ^ b2) >> key_at(1, 7)) & 1u && !((a | b2) >> key_at(1, 8) & 1u);   /* mutes (T1, T8) breathe, a spare black dark */
         song.g[G_BPM] = 72;
         a = leds_at(0); b2 = leds_at(250);
         ok &= !((a | b2) >> white(0) & 1u) && !((a | b2) >> white(3) & 1u);   /* 1/8, REVERSE: too long at 72 */
@@ -3578,7 +3583,7 @@ static int test_sample_alert(void)
                  !snd_missing(&trk[1], &i) && !snd_missing(&trk[2], &i) && !snd_missing(&trk[3], &i) &&
                  !str_eq(ui.msg, nf));
     set_engine_of(TSEL, ENGI_SAMPLE);
-    TSEL->p[P_E0] = (int16_t)(SMP_NSETS + 1u);      /* SET USR2: empty */
+    TSEL->p[P_E0] = (int16_t)(SMP_NBASE + 1u);      /* SET USR2: empty */
     frame();
     ok = msg_is(nf);
     frames(1500);
@@ -3588,19 +3593,19 @@ static int test_sample_alert(void)
     frames(100);
     ok &= !ui.msg_t;
     bad += check("SAMPLE on an empty USR2: NO SAMPLE once (not again on a note)", ok);
-    TSEL->p[P_E0] = (int16_t)(SMP_NSETS + 2u);      /* USR3: said for it */
+    TSEL->p[P_E0] = (int16_t)(SMP_NBASE + 2u);      /* USR3: said for it */
     frame();
     ok = msg_is(nf);
     TSEL->p[P_E0] = 0;                              /* PIANO: nothing; then USR3 again: said again */
     frames(1500);
     ok &= !ui.msg_t;
-    TSEL->p[P_E0] = (int16_t)(SMP_NSETS + 2u);
+    TSEL->p[P_E0] = (int16_t)(SMP_NBASE + 2u);
     frame();
     ok &= msg_is(nf);
     bad += check("SAMPLE: another empty slot is said; back to it after a sample: said again", ok);
     frames(1500);
     set_engine_of(TSEL, 8u);                         /* GRAIN, SRC USR2 */
-    TSEL->p[P_E0] = (int16_t)(SMP_NSETS + 1u);
+    TSEL->p[P_E0] = (int16_t)(SMP_NBASE + 1u);
     frame();
     bad += check("GRAIN on an empty USR2: said", msg_is(nf));
     frames(1500);
@@ -3618,7 +3623,7 @@ static int test_sample_alert(void)
 #endif
     /* a project with an empty slot: said after LOADED */
     set_engine_of(TSEL, ENGI_SAMPLE);
-    TSEL->p[P_E0] = (int16_t)(SMP_NSETS + 1u);
+    TSEL->p[P_E0] = (int16_t)(SMP_NBASE + 1u);
     frames(1500);
     project_save(2);
     frames(1500);
@@ -3861,38 +3866,43 @@ static int test_quick_layers(void)
     ok = trk[1].p[P_MUTE] == 1 && ui.layer == LAYER_GLO && !gates() && mo_w == mo;
     a = leds_at(0); b2 = leds_at(250);
     ok &= ((a & b2) >> black(0)) & 1u && !(((a | b2) >> black(1)) & 1u);           /* T1 sounding lit, T2 muted dark */
-    ok &= ((a ^ b2) >> white(0)) & 1u && ((a ^ b2) >> white(7)) & 1u && ((a ^ b2) >> white(5)) & 1u &&   /* (D4: LEARN) */
-          !(((a | b2) >> white(6)) & 1u);
+    ok &= ((a ^ b2) >> white(0)) & 1u && ((a ^ b2) >> white(7)) & 1u && ((a ^ b2) >> white(GLO_ALL)) & 1u &&
+          ((a ^ b2) >> white(GLO_LEARN)) & 1u && ((a ^ b2) >> white(GLO_TAP)) & 1u &&   /* (NightShift: SOLO F3..F4, then
+                                                                                  * G4 ALL, A4 LEARN, B4 TAP) */
+          !(((a | b2) >> white(11)) & 1u);
     key_up(black(1)); btn_up(B_GLO); frame();
     bad += check("GLO + black key 2: T2 MUTE latched (SET), silent, no MIDI; LEDs: sounding lit, muted dark", ok &&
                  trk[1].p[P_MUTE] == 1 && !ui.layer);
     lay_combo(B_GLO, black(1)); key_up(black(1)); frame();
-    key_down(white(4)); key_up(white(4)); frame();
+    key_down(white(GLO_ALL)); key_up(white(GLO_ALL)); frame();
     lay_combo(B_GLO, black(2)); key_up(black(2)); frame();
     ok = trk[1].p[P_MUTE] == 0 && trk[2].p[P_MUTE] == 1;
-    key_down(white(4)); frame(); key_up(white(4)); frame();
+    lay_combo(B_GLO, black(7)); key_up(black(7)); frame();   /* (NightShift: black key 8 mutes T8) */
+    ok &= trk[7].p[P_MUTE] == 1;
+    key_down(white(GLO_ALL)); frame(); key_up(white(GLO_ALL)); frame();
     btn_up(B_GLO); frame();
-    bad += check("  again: unmuted; C4: UNMUTE ALL", ok && !trk[2].p[P_MUTE] && !trk[1].p[P_MUTE]);
+    bad += check("  again: unmuted; black key 8: T8; G4: UNMUTE ALL", ok && !trk[2].p[P_MUTE] && !trk[1].p[P_MUTE] &&
+                 !trk[7].p[P_MUTE]);
     lay_combo(B_GLO, white(2));
     perf_begin(CTL);
-    ok = perf_solo == 4u && ((perf_act >> PF_M1) & 15u) == 0xBu;   /* T3 solo: T1 T2 T4 muted */
+    ok = perf_solo == 4u && ((perf_act >> PF_M1) & 255u) == 0xFBu;   /* T3 solo: T1 T2 T4..T8 muted */
     btn_up(B_GLO); frame();
     perf_begin(CTL);
     ok &= perf_solo == 4u && ui.layer == LAYER_GLO;                 /* GLO let go first: the solo stays with its key */
     key_up(white(2)); frame();
     perf_begin(CTL);
     bad += check("GLO + A3 held: SOLO T3 (the others muted), lasts while the key is held, not P_MUTE",
-                 ok && !perf_solo && !((perf_act >> PF_M1) & 15u) && !trk[0].p[P_MUTE] && !ui.layer);
+                 ok && !perf_solo && !((perf_act >> PF_M1) & 255u) && !trk[0].p[P_MUTE] && !ui.layer);
     song.g[G_BPM] = 100;
     btn_down(B_GLO); frame();
-    for (i = 0; i < 3u; i++) { key_down(white(7)); frame(); key_up(white(7)); frames(480); }
+    for (i = 0; i < 3u; i++) { key_down(white(GLO_TAP)); frame(); key_up(white(GLO_TAP)); frames(480); }
     ok = song.g[G_BPM] == 120;
     btn_up(B_GLO); frame();
     song.g[G_CLOCK] = 1;
-    lay_combo(B_GLO, white(7)); key_up(white(7)); frame();
+    lay_combo(B_GLO, white(GLO_TAP)); key_up(white(GLO_TAP)); frame();
     ok &= msg_is("TAP: CLK IS EXT") && song.g[G_BPM] == 120;
     btn_up(B_GLO); frame(); song.g[G_CLOCK] = 0;
-    bad += check("GLO + F4 x3 at 0.5 s: TAP 120 BPM; with CLK EXT: dimmed, it says why", ok);
+    bad += check("GLO + B4 x3 at 0.5 s: TAP 120 BPM; with CLK EXT: dimmed, it says why", ok);
     {
         int16_t l2 = trk[2].p[P_LEVEL], atk = TSEL->p[P_ATK];
         go_title("ENV");
@@ -7889,10 +7899,10 @@ static int test_bpm_lock(void)
                  ok && ui.page == page);
     song.g[G_BPM] = 100;
     btn_down(B_GLO); frame();
-    for (i = 0; i < 3u; i++) { key_down(white(7)); frame(); key_up(white(7)); frames(480); }
+    for (i = 0; i < 3u; i++) { key_down(white(GLO_TAP)); frame(); key_up(white(GLO_TAP)); frames(480); }
     ok = song.g[G_BPM] == 120;
     btn_up(B_GLO); frame();
-    bad += check("#58 BPM LOCK ON: GLO + F4 TAP still sets the tempo", ok);
+    bad += check("#58 BPM LOCK ON: GLO + B4 TAP still sets the tempo (NightShift: F4 is T8 SOLO)", ok);
 
     {   /* saved with the settings; settings from before it: OFF (and so again: idempotent) */
         persist_t p, q;
@@ -8365,8 +8375,8 @@ static int test_song_lanes(void)
     /* A: notes 60 + k, LEN 4 of 1/16, QUANTIZE ON; T3 automated (REV 100 on its step 1). B: notes 72 + k, T1 LEN 8,
      * T2 LEN 6, T3 LEN 4 of 1/8 QUANTIZE OFF, T4 LEN 2 */
     for (st = 0; st < 2u; st++) {
-        static const int16_t LEN[2][NTRK] = {{4, 4, 4, 4}, {8, 6, 4, 2}};
-        for (k = 0; k < NTRK; k++) {
+        static const int16_t LEN[2][NTRK_V4] = {{4, 4, 4, 4}, {8, 6, 4, 2}};
+        for (k = 0; k < NTRK_V4; k++) {                /* (NightShift: tracks 5..8 silent lanes below) */
             track_t *t = &trk[k];
             track_defaults_steps(t);
             motion_clear(t);
@@ -8397,10 +8407,11 @@ static int test_song_lanes(void)
         t->p[P_SQNT] = 1;
     }
     chain_config.count = 4;
-    chain_config.row[0] = (chain_row_t){{0, 1, CHAIN_SILENT, 1}, 1};
-    chain_config.row[1] = (chain_row_t){{CHAIN_SILENT, 1, 0, CHAIN_SILENT}, 2};
-    chain_config.row[2] = (chain_row_t){{CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT}, 1};
-    chain_config.row[3] = (chain_row_t){{1, 0, 1, 0}, 1};
+#define S4 CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT                     /* (NightShift: tracks 5..8 silent) */
+    chain_config.row[0] = (chain_row_t){{0, 1, CHAIN_SILENT, 1, S4}, 1};
+    chain_config.row[1] = (chain_row_t){{CHAIN_SILENT, 1, 0, CHAIN_SILENT, S4}, 2};
+    chain_config.row[2] = (chain_row_t){{CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, S4}, 1};
+    chain_config.row[3] = (chain_row_t){{1, 0, 1, 0, S4}, 1};
     bad += check("SONG lanes prepare: the slots the lanes name (A, B), the silent ones none", chain_prepare() == 0);
     events_block(32);
     ok = chain.running && chain.row == 0u && chain.clk == 0u;
@@ -8442,7 +8453,8 @@ static int test_song_lanes(void)
               trk[k].p[P_REV] == (int16_t)rev[k] && !trk[k].seq_n;
     bad += check("SONG lanes: the end (T1 B's 8 steps) stops; the working patterns, LEN DIV and QUANTIZE back", ok);
     chain_config.count = 1;
-    chain_config.row[0] = (chain_row_t){{CHAIN_SILENT, 2, CHAIN_SILENT, CHAIN_SILENT}, 1};
+    chain_config.row[0] = (chain_row_t){{CHAIN_SILENT, 2, CHAIN_SILENT, CHAIN_SILENT, S4}, 1};
+#undef S4
     ok = chain_prepare() == 3u + 2u && !chain.armed;
     chain_config.row[0].slot[1] = CHAIN_SILENT;
     memset(proj_slot, 0, sizeof proj_slot);
@@ -9476,6 +9488,42 @@ static int test_edit_quick_actions(void)
     return bad;
 }
 
+/* NightShift: PHYS and GRAIN (more engine memory than tracks 5..8 have, engines.c ENG_MEM_SMALL) on T1..T4 only: the
+ * EDIT knob steps over them on T5..T8, picking one there is refused (T1-T4 ONLY), the ISR never runs one there; the
+ * SLICER's STUT records into four shared buffers: a fifth STUT track plays live until one is given back */
+static int test_nightshift(void)
+{
+    int bad = 0, ok = 1;
+    uint32_t p, k, e, n, seen;
+    ui_power_on();
+    for (p = 0; p < NTRK; p++) {
+        for (e = trk[p].eng_req, seen = 0, n = 0; n < 2u * NENGINES; n++) {   /* the knob round, both ways */
+            e = eng_step_for(e, n < NENGINES ? 1 : -1, p);
+            seen |= 1u << e;
+        }
+        ok &= p < NPART_BIG ? (seen >> ENGI_PHYS & 1u) && (seen >> 8 & 1u) : !(seen >> ENGI_PHYS & 1u) && !(seen >> 8 & 1u);
+    }
+    bad += check("NightShift: the EDIT knob reaches PHYS and GRAIN on T1..T4, steps over them on T5..T8",
+                 ok && ENGINES[8] == &ENG_GRAIN && ENGINES[ENGI_PHYS] == &ENG_PHYS);
+    k = trk[5].eng_req;
+    set_engine_of(&trk[5], ENGI_PHYS);
+    ok = trk[5].eng_req == k && str_eq(ui.msg, "PHYS T1-T4 ONLY");
+    set_engine_of(&trk[6], 8);
+    ok &= trk[6].eng_req != 8u;
+    set_engine_of(&trk[2], ENGI_PHYS);
+    ok &= trk[2].eng_req == ENGI_PHYS && eng_fits(ENGI_PHYS, 2) && !eng_fits(ENGI_PHYS, 5) && eng_fits(ENGI_DRUM, 7);
+    bad += check("NightShift: PHYS / GRAIN on T6 / T7 refused (PHYS T1-T4 ONLY), taken on T3", ok);
+    memset(sl, 0, sizeof sl);
+    for (ok = 1, k = 0; k < 4u; k++)
+        ok &= sl_claim(&sl[k], 1) && sl[k].own == k + 1u;
+    ok &= !sl_claim(&sl[4], 1) && !sl[4].own && sl_claim(&sl[0], 1) && sl[0].own == 1u;   /* (a holder keeps its own) */
+    sl_claim(&sl[2], 0);                                   /* track 3 leaves STUT: its buffer is free */
+    ok &= !sl[2].own && sl_claim(&sl[4], 1) && sl[4].own == 3u && !sl_claim(&sl[7], 1);
+    bad += check("NightShift: SLICER STUT: four shared buffers, a fifth track waits for one given back", ok && SL_NBUF == 4u);
+    memset(sl, 0, sizeof sl);
+    return bad;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -9561,6 +9609,7 @@ int main(void)
     bad += test_fx_map_columns();
     bad += test_help();
     bad += test_no_flash();
+    bad += test_nightshift();
 #if FELUCCA_FM4
     bad += test_fm_charts();                        /* (DIGITAL's charts: built with FELUCCA_FM4=1 only) */
 #else

@@ -871,7 +871,7 @@ static void edit_param(uint32_t slot, int32_t steps)
         if (slot == 0u) {
             preset_step(steps);
         } else if (slot == 1u) {
-            select_engine(eng_step(TSEL->eng_req, steps));
+            select_engine(eng_step_for(TSEL->eng_req, steps, song.sel));
         } else if (slot == 2u) {
             preset_mark(steps > 0);
         } else if (slot == 3u) {                          /* LIST: ALL FAV BASS .. OTHER (ui.c list_mode), no wrap */

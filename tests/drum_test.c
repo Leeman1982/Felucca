@@ -1248,7 +1248,7 @@ static uint64_t seq_hash(const uint8_t (*ev)[3], uint32_t nev, uint32_t frames, 
 static void retired(void)
 {
     static const uint8_t MAP[4] = {DK_STD, DK_66, DK_10, DK_77};
-    static const uint8_t ORDER[6] = {DK_STD, DK_80, DK_10, DK_66, DK_55, DK_77};
+    static const uint8_t ORDER[7] = {DK_STD, DK_80, DK_10, DK_66, DK_55, DK_77, DK_LINN};   /* (NightShift: LINN last) */
     const param_desc_t *d = &ENG_DRUM.edit[0];
     uint32_t r, n, k, bad = 0, same = 0;
     int16_t kick;
@@ -1289,16 +1289,16 @@ static void retired(void)
     }
     {
         int32_t v = DK_STD, i;
-        for (i = 0; i < 6; i++) {                       /* STD 80 10 66 55 77, then held at the end */
+        for (i = 0; i < 7; i++) {                       /* STD 80 10 66 55 77 LINN, then held at the end */
             bad += v != ORDER[i];
             v = param_turn(d, v, 1);
         }
-        bad += v != DK_77 || param_turn(d, DK_80, -1) != DK_STD || param_turn(d, DK_STD, -1) != DK_STD;
+        bad += v != DK_LINN || param_turn(d, DK_80, -1) != DK_STD || param_turn(d, DK_STD, -1) != DK_STD;
     }
     for (r = 1; r < 4u; r++)
         bad += strcmp(d->names[r], d->names[MAP[r]]) != 0 || enum_orig(d, (int32_t)r) != MAP[r] ||
                param_fit(d, (int32_t)r) != MAP[r];
-    bad += param_fit(d, 99) != DK_77 || param_fit(d, -5) != DK_STD || enum_orig(d, DK_55) != DK_55;
+    bad += param_fit(d, 99) != DK_LINN || param_fit(d, -5) != DK_STD || enum_orig(d, DK_55) != DK_55;
     bad += param_fit(&TP[P_LEVEL], 77) != 77;
     {   /* a motion event of KIT 2 (CYM): stored and played as 10 */
         host_tracks_init();
@@ -1354,6 +1354,80 @@ static void demos(const char *dir)
            "keys, a beat (PUNCH, ROUND, the kits 80 10 66 55 77)\n", dir, (uint32_t)DVT_COUNT);
 }
 
+/* NightShift: the LINN kit (Open Samples' LinnDrum, eng_drum.c linn_run) on part 7, its power-on place (a small engine
+ * memory region): every lane sounds alone, under full scale, and ends; TUNE moves the kick's pitch (its length); a closed
+ * hat chokes the open hat; a hit's end is silent (no step past the sample's last) */
+static void linn(void)
+{
+    track_t *t = &trk[6];
+    uint32_t l, ends = 1, loud = 1, i, n_lo, n_hi;
+    int32_t pk, o[2 * CTL], worst = 0;
+    int ok;
+#ifndef SMP_LINN_ZONES
+    printf("drum_test: LINN: no Open Samples in this build (tools/fetch_open_samples.py)        skip\n");
+    return;
+#endif
+    for (l = 0; l < NLANE; l++) {
+        host_tracks_init();
+        memset(t->v, 0, sizeof t->v);
+        host_preset(t, ENGI_DRUM, DRUM_PRE_LINN);
+        trk_note_on(t, DRUM_LANE_NOTE[l], 120);
+        pk = blocks_peak(40);
+        loud &= pk > 2000 && pk < 32000;
+        worst = pk > worst ? pk : worst;
+        for (i = 0; i < 2000u && voices_on(t); i++)  /* (2000 blocks: 1.4 s, the longest hit is the open hat's 0.9 s) */
+            mix_block(o, CTL);
+        ends &= !voices_on(t);
+    }
+    printf("drum_test: LINN: the 8 lanes alone on part 7: each sounds (peak %d at most, full scale 32767) %s, ends %s\n",
+           (int)worst, loud ? "ok" : "FAIL", ends ? "ok" : "FAIL");
+    fails += !loud + !ends;
+    /* TUNE: the kick lasts longer tuned down (one-shot, read slower) */
+    for (i = 0; i < 2u; i++) {
+        uint32_t b = 0;
+        host_tracks_init();
+        memset(t->v, 0, sizeof t->v);
+        host_preset(t, ENGI_DRUM, DRUM_PRE_LINN);
+        t->p[P_E1] = i ? 127 : 0;
+        trk_note_on(t, 36, 120);
+        while (voices_on(t) && b < 4000u) { mix_block(o, CTL); b++; }
+        if (i) n_hi = b; else n_lo = b;
+    }
+    ok = n_lo > n_hi * 3u / 2u;
+    printf("drum_test: LINN: TUNE 0 / 127: the kick rings %u / %u blocks (down: longer) %s\n", n_lo, n_hi, ok ? "ok" : "FAIL");
+    fails += !ok;
+    host_tracks_init();
+    memset(t->v, 0, sizeof t->v);
+    host_preset(t, ENGI_DRUM, DRUM_PRE_LINN);
+    trk_note_on(t, 46, 100);
+    for (i = 0; i < 10u; i++) mix_block(o, CTL);
+    ok = drum_kit_of(t)[DV_HATO].slive != 0;
+    trk_note_on(t, 42, 100);
+    for (i = 0; i < 4u; i++) mix_block(o, CTL);
+    ok &= !drum_kit_of(t)[DV_HATO].slive && drum_kit_of(t)[DV_HATC].slive;
+    printf("drum_test: LINN: a closed hat chokes the open hat %s\n", ok ? "ok" : "FAIL");
+    fails += !ok;
+    {   /* a hit's end inside a block: the samples after it are 0 */
+        static track_t tt;
+        voice_t v = {0};
+        drum_lane_t L;
+        int32_t y[64];
+        uint32_t lane = DV_RIM, k, z0;
+        const smp_zone_t *z = &SMP_ZONES[LINN_Z[lane]];
+        tt = *t;
+        tt.p[P_E1] = 64; tt.p[P_E3] = 127;
+        v.s[0] = (int16_t)lane; v.vel = 127;
+        memset(&L, 0, sizeof L);
+        linn_trigger(&L, lane);
+        L.spos = z->n - 4u;                             /* four samples from its end */
+        ok = linn_run(&tt, &v, &L, y, 64) && !L.slive;
+        for (k = 0, z0 = 0; k < 64u; k++) z0 += y[k] == 0;
+        ok &= z0 >= 54u && !linn_run(&tt, &v, &L, y, 64);
+        printf("drum_test: LINN: a hit ending inside a block: %u of 64 samples silent after it, then none %s\n", z0, ok ? "ok" : "FAIL");
+        fails += !ok;
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (!getenv("NOCOST")) {
@@ -1373,6 +1447,7 @@ int main(int argc, char **argv)
     lane_budget();
     lane_levels();
     engine();
+    linn();
     if (argc > 1)
         demos(argv[1]);
     printf("drum_test: %s\n", fails ? "FAILED" : "all checks ok");

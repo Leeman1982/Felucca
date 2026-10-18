@@ -253,6 +253,7 @@ def key_split(roots):
 SLOT_SIZE, SLOT_DATA_OFF, SLOT_RATE, SLOT_ZONES = 0x14000, 512, 22050, 16
 SLOT_HDR_LEN = 32 + SLOT_ZONES * 28
 SLOT_MAX_DATA = SLOT_SIZE - SLOT_DATA_OFF
+SLOT_ROOM = (SLOT_SIZE, SLOT_SIZE, 0xA000)   # NightShift: USR3 holds 40 KiB (eng_sample.c smp_slot_size)
 
 
 def note_from_name(name, default=60):
@@ -270,17 +271,18 @@ def to_int16(x):
     return [max(-32768, min(32767, int(v / pk * 30000))) for v in x]
 
 
-def user_slot(name, zones):
+def user_slot(name, zones, max_data=SLOT_MAX_DATA):
     """zones: [(int16 samples at SLOT_RATE, root, lo or None, hi or None)] -> (header bytes, ADPCM data).
-    Zones without lo/hi split the keyboard between their roots."""
+    Zones without lo/hi split the keyboard between their roots. max_data: the slot's room less its header
+    (NightShift's USR3: SLOT_ROOM[2] - SLOT_DATA_OFF)."""
     zs, data = [], bytearray()
     for s, root, lo, hi in zones:
         adp, st = ima_encode(s, 0)
         zs.append(dict(off=len(data), n=len(s), ls=0, le=len(s) - 1, root=root, lo=lo, hi=hi, pred=st[0], idx=st[1]))
         data += adp
-    if len(data) > SLOT_MAX_DATA:
-        raise ValueError(f"too long: {len(data)} B of ADPCM, a slot holds {SLOT_MAX_DATA} B "
-                         f"({SLOT_MAX_DATA * 2 / SLOT_RATE:.1f} s in all)")
+    if len(data) > max_data:
+        raise ValueError(f"too long: {len(data)} B of ADPCM, the slot holds {max_data} B "
+                         f"({max_data * 2 / SLOT_RATE:.1f} s in all)")
     if not 1 <= len(zs) <= SLOT_ZONES:
         raise ValueError(f"1..{SLOT_ZONES} files per slot")
     zs.sort(key=lambda z: z["root"])

@@ -360,7 +360,7 @@ static void midi_control(uint32_t ch, uint32_t cc, uint32_t value)
     }
 }
 
-/* ROUT CH1-4 listens to channels 1..4 only (1.2: CH5-8, CH9-12, CH13-16 to their four). A switch to a block from
+/* ROUT CH1-8 listens to channels 1..8 only (1.2: CH5-12, CH9-16, CH13-16 to theirs). A switch to a block from
  * SEL or another block (events_block, before the queue) lets go of what the other channels hold: their notes
  * released (also pedal-held ones), their pedal, bend, wheel and RPN selection reset, so no note can hang on a
  * channel that is no longer heard. Each part's bend then follows its own channel of the block. */
@@ -383,8 +383,8 @@ static void __attribute__((noinline)) midi_route_block(void)
 }
 
 /* Keep the occasional controller/panic dispatch outside the hot rendering loop. Channel voice messages only
- * (realtime and clock are handled in events_block, SysEx never reaches here). With ROUT CH1-4 channels
- * 5..16 are ignored entirely (with CH5-8 .. CH13-16 every channel outside the block): notes, bend, CCs (CC1/11/64, RPN, and the CC120/121/123 panic and reset),
+ * (realtime and clock are handled in events_block, SysEx never reaches here). With ROUT CH1-8 channels
+ * 9..16 are ignored entirely (with CH5-12 .. CH13-16 every channel outside the block): notes, bend, CCs (CC1/11/64, RPN, and the CC120/121/123 panic and reset),
  * channel aftertouch, so they stay free for other instruments. */
 static void __attribute__((noinline)) midi_event(uint32_t st, uint32_t ch, uint32_t d1, uint32_t d2)
 {

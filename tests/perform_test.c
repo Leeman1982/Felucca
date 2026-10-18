@@ -63,7 +63,8 @@ static void perf_reset(void)
     memset(&pf, 0, sizeof pf);
     pf.src = pf.next = PF_N;
     pf.lc = PF_TOP;
-    pf.mg[0] = pf.mg[1] = pf.mg[2] = pf.mg[3] = 32768;
+    for (uint32_t k = 0; k < NTRK; k++)
+        pf.mg[k] = 32768;
     perf_held = perf_act = 0;
     perf_latched = 0;
     perf_kill = 0;
@@ -418,8 +419,8 @@ static int test_keys(void)
             ok &= !kb_layer && !perf_held && mo_w == mo0;
         }
         fm1_in.buttons = 0;
-        bad += check("the keys without an effect (4 white from D5, 7 black from D#4): silent, nothing held",
-                     ok && assigned == 0xD5BFFu);   /* F3 .. C5 but D#4 F#4 G#4 A#4 */
+        bad += check("the keys without an effect (4 white from D5, 3 black from C#5): silent, nothing held",
+                     ok && assigned == 0xFFFFFu);   /* F3 .. C5 (NightShift: black keys 1..8 mute T1..T8) */
         kb_mask = perf_mask = 0;
     }
     usb.config = 0;

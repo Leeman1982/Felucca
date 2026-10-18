@@ -1,3 +1,50 @@
+# NightShift (a Felucca fork)
+
+**NightShift** is an eight-track groovebox build of Felucca 1.5 for the M-VAVE FM-1, with a few synth basses,
+strings and a LinnDrum kit from [Open Samples](https://github.com/pumodi/open-samples). Everything below the
+NightShift section is Felucca's own documentation and still applies, except where this section says otherwise.
+**Not tested on an FM-1 yet**: it builds, fits and passes the host tests; install at your own risk (M-VAVE's
+updater or **Return to official V15** takes you back).
+
+## NightShift
+
+- **Eight tracks.** The ALGORITHM knob selects T1..T8. Views of four (MIXER, HOME TRACKS / LEVELS, GLO's knobs,
+  the SONG lanes) show the bank of the selected track: T1..T4 or T5..T8.
+- **Power-on sounds:** T1..T4 as Felucca (ACID, PAD, PULSE LD, DRUM KIT); T5 101 BASS, T6 JUNO STR, T7 LINN KIT,
+  T8 the default ANALOG.
+- **New sounds** (SAMPLE engine, SET): **101 BASS** (an SH-101 style bass from a JV-2080), **4P BASS** (a
+  four-pole ladder bass), **JUNO STR** (Juno strings), **LINN** (the drum hits as a set). Presets: 101 BASS,
+  101 PLUCK, 4P BASS, JUNO STR, SLOW STR. DRUM engine: KIT **LINN**, preset **LINN KIT** (kick, snare, clap, closed
+  and open hat with choke, tom, rim, cowbell on the DRUM lanes; TUNE, TONE, DECY and ACC work on it, SNAP and KICK
+  do not).
+- **GLO layer:** black keys 1..8 mute T1..T8, F3..F4 (white) solo T1..T8 while held, **G4** unmute all, **A4** MIDI
+  LEARN, **B4** TAP (Felucca: C4, D4, F4). KNOB 1..4: the levels of the selected track's bank.
+- **MIDI IN routing** (MENU > MIDI > ROUT): CH1-8 (default: channel n plays track n), SEL, CH5-12, CH9-16,
+  CH13-16. MIDI out of a track whose channel would pass 16 is dropped. MIDI LEARN maps T1..T4 only.
+
+**The limits — read these:**
+
+- **The voice budget is still 8 voices** shared by all tracks (as Felucca's four). Eight busy tracks steal voices
+  from each other; a held pad on one track can cut notes on another. CPU headroom for eight tracks on the device
+  is unmeasured.
+- **PHYS and GRAIN run on T1..T4 only** (RAM: their engine memory is 12.9 KB a track); T5..T8 skip them.
+- **SLICER STUT** has four shared buffers: at most four tracks stutter at once.
+- **USR3 holds 40 KiB** (Felucca: 80): the upper half of its flash keeps tracks 5..8 of the projects and the
+  autosave. A Felucca sample in USR3 longer than 40 KiB is unusable (re-upload a shorter one).
+- **Projects:** a project is Felucca's record (tracks 1..4, the same format, FUN10) plus a second record for
+  tracks 5..8 (NSH1), matched by a checksum. A project saved by Felucca loads with T5..T8 at their power-on sounds,
+  empty; a NightShift project loads in Felucca 1.5 as its tracks 1..4. A power cut between the two writes keeps
+  the old tracks 5..8 or the new ones, never a mix (a mismatched record reads as defaults).
+- **Not covered for tracks 5..8:** the editor's full backup (its projects and the running music are Felucca's
+  records: restoring one puts T5..T8 at their power-on sounds, unless that project's own tracks 5..8 are still in
+  flash); SONG rows sent by a Felucca editor (four lanes) set T5..T8 to T1's slot.
+- **Flash:** the image is 553 KB of 581 KB; there is about 28 KB left for anything else.
+- **Open Samples licence (not GPL, not CC0):** free to use for music and sound playback, commercial or not; **not
+  to be sold** as or in a sample product; the library may be passed on as is non-commercially; **no AI training**.
+  The excerpts are not in this repository: `tools/fetch_open_samples.py` makes them (from `../open-samples`, or
+  downloaded) before `./build.sh`. Firmware built with them: give it away, do not sell it
+  ([attribution](assets/samples-os/ATTRIBUTION.txt)). Built without them, the four sets play SAMPLE's sine.
+
 # Felucca
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
@@ -395,6 +442,7 @@ For more details, see [On AI-Assisted Development and Responsibility](https://gi
   font ([MIT](LICENSES/MIT-Fukiai.txt))
 - Fonts: [Inter Tight](https://github.com/rsms/inter-tight) by The Inter Project Authors, [SIL OFL 1.1](LICENSES/OFL-InterTight.txt);
   the browser emulator's labels: [DotGothic16](https://github.com/fontworks-fonts/DotGothic16) by The DotGothic16 Project Authors, [SIL OFL 1.1](LICENSES/OFL-DotGothic16.txt)
+- NightShift samples: [Open Samples](https://github.com/pumodi/open-samples) by Jeffrey "Pumodi" Brice and contributors (the JV-2080 101_Bass, 4pole_Bass, JUNO_Strings; the LinnDrum), Open Samples Permissive Use Public License, not resold ([attribution](assets/samples-os/ATTRIBUTION.txt))
 - Samples: [Versilian Studios](https://versilian-studios.com/) [VSCO-2 Community Edition](https://github.com/sgossner/VSCO-2-CE) and [VCSL](https://github.com/sgossner/VCSL), CC0 1.0: the SAMPLE sets, also SLICE's PIANO and PIANO HD ([attribution](assets/samples-cc0/ATTRIBUTION.txt))
 - VOICE engine: after [klattsch](https://github.com/tgies/klattsch) by Tony Gies (MIT); formant data from Klatt (1980) and Hillenbrand et al. (1995)
 - PHYS engine: models ported from [DaisySP](https://github.com/electro-smith/DaisySP) by Electrosmith and Emilie Gillet ([MIT](LICENSES/MIT-DaisySP.txt)) and from Emilie Gillet's [eurorack](https://github.com/pichenettes/eurorack) code ([MIT](LICENSES/MIT-Rings.txt))

@@ -7,9 +7,10 @@
  *              keys' effects are the user's (1.2): a white key held in the layer (FX held or locked) + PRESETS turned
  *              steps that key through NONE and the effects (it holds the new one at once), EDIT puts the key's default
  *              back; kept with the settings (fx_keys) when the layer closes
- *   GLO  SET   black keys 1..4 (F#3 G#3 A#3 C#4) T1..T4 MUTE (latched; lit = sounding), F3..B3 SOLO T1..T4 while
- *              held (HOLD cells, a corner triangle), C4 UNMUTE ALL, D4 MIDI LEARN on / off (1.5, midi_learn.c), F4 TAP
- *              tempo; KNOB 1..4 T1..T4 LEVEL;
+ *   GLO  SET   black keys 1..8 (F#3 .. A#4) T1..T8 MUTE (latched; lit = sounding), F3..F4 SOLO T1..T8 while
+ *              held (HOLD cells, a corner triangle), G4 UNMUTE ALL, A4 MIDI LEARN on / off (1.5, midi_learn.c), B4 TAP
+ *              tempo; KNOB 1..4 the LEVEL of the selected track's four (T1..T4 or T5..T8: glo_bank) (NightShift: eight
+ *              tracks; Felucca's four had C4 D4 F4);
  *              GLO + PLAY: from the top without stopping
  *   SCL  SET   any key: its note name is ROOT; KNOB 1..4 ROOT SCL CHRD VOIC (LY_SCL: the SCL page's first two,
  *              the CHORD page's two; QNT TRN stay on SCL); the LEDs show the root lit and the scale's notes breathing
@@ -91,8 +92,9 @@ static struct {
     uint8_t fxk;                       /* FX: the white key pressed last in the layer (+ 1; 0 none): PRESETS assigns it */
     uint8_t mute[NPART];               /* EDIT: the DRUM lanes' mutes when it opened (eng_drum.c drum_mute; OCT-) */
     uint32_t eqh;                      /* EDIT: the keys (bits 0..26) of the HOLD quick actions held */
-    int16_t v[9];                      /* the values when it opened: GLO mutes, levels, BPM; SCL ROOT..TRN, CHRD VOIC;
+    int16_t v[9];                      /* the values when it opened: GLO BPM (v[8]); SCL ROOT..TRN, CHRD VOIC;
                                         * SEQ LEN DIV SWING GATE; REC the settings (ui_rec_prefs) */
+    int16_t gm[NTRK], gl[NTRK];        /* GLO: every track's MUTE and LEVEL when it opened */
     uint32_t solo;                     /* GLO: the keys held that solo */
     uint32_t tap[4];                   /* GLO TAP: the last taps (fm1_ms) */
     uint8_t ntap;
@@ -241,8 +243,10 @@ static void layer_opened(uint32_t l)
         if (l == LAYER_SEQ) {
             lys.v[k] = TSEL->p[P_SLEN + k];
         } else if (l == LAYER_GLO) {
-            lys.v[k] = trk[k].p[P_MUTE];
-            lys.v[4u + k] = trk[k].p[P_LEVEL];
+            for (uint32_t j = k; j < NTRK; j += 4u) {
+                lys.gm[j] = trk[j].p[P_MUTE];
+                lys.gl[j] = trk[j].p[P_LEVEL];
+            }
         } else {
             lys.v[k] = TSEL->p[P_ROOT + k];
             lys.v[4u + k] = k < 2u ? TSEL->p[P_CHRD + k] : 0;
@@ -460,6 +464,17 @@ static const char *const PF_NAME[PF_NFX + 1] = {"REPEAT 1/8", "REPEAT 1/16", "RE
 static const char *const PF_CELL[PF_NFX] = {"1/8", "1/16", "1/32", "REV", "LPF", "HPF", "STOP", "FRZ", "OCT+", "OCT-",
     "FLNG", "PHSR"};
 static const char W_NOTE[16] = {'F', 'G', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'A', 'B', 'C', 'D', 'E', 'F', 'G'};
+/* GLO's white keys after the eight SOLO keys (key places: G4 A4 B4) */
+#define GLO_ALL 8u
+#define GLO_LEARN 9u
+#define GLO_TAP 10u
+static uint32_t glo_mutes(void)                          /* bit k: track k muted */
+{
+    uint32_t k, m = 0;
+    for (k = 0; k < NTRK; k++)
+        m |= (uint32_t)(trk[k].p[P_MUTE] != 0) << k;
+    return m;
+}
 /* each pass: the map from the settings to the ISR (a change: seq.c makes a key held take its new effect) */
 static void fx_map_sync(void)
 {
@@ -619,13 +634,13 @@ static void layer_key(uint32_t l, uint32_t k)
                 trk[p].p[P_MUTE] = (int16_t)!trk[p].p[P_MUTE];
         } else if (p < NTRK) {
             lys.solo |= 1u << k;                        /* (layer_masks: perf_solo while held) */
-        } else if (p == 4u) {
+        } else if (p == GLO_ALL) {
             for (i = 0; i < NTRK; i++)
                 trk[i].p[P_MUTE] = 0;
-        } else if (p == 7u) {
+        } else if (p == GLO_TAP) {
             glo_tap();
-        } else if (p == 5u) {
-            ml_toggle();                                /* D4: MIDI LEARN on / off (midi_learn.c) */
+        } else if (p == GLO_LEARN) {
+            ml_toggle();                                /* A4: MIDI LEARN on / off (midi_learn.c) */
         }
     } else if (l == LAYER_SCL) {
         TSEL->p[P_ROOT] = (int16_t)((k + 5u) % 12u);    /* the key's note name (F3 = F) */
@@ -672,15 +687,16 @@ static void layer_knob(uint32_t k, int32_t s)
         if (k == 3u && !perf_harm_on())
             s = -s;                                     /* DEPTH (100 - perf_k[3]) rises to the right (#40: it fell) */
         perf_k[k] = (int8_t)clamp(perf_k[k] + accel(EN_K1 + k, s, k ? 100 : 200), k ? 0 : -100, 100);   /* (#126) */
-    } else if (l == LAYER_GLO) {                        /* T1..T4 LEVEL, recorded as on MIXER */
-        int16_t *vp = &trk[k].p[P_LEVEL];
+    } else if (l == LAYER_GLO) {                        /* the bank's LEVEL, recorded as on MIXER */
+        track_t *t = &trk[trk_bank() + k];
+        int16_t *vp = &t->p[P_LEVEL];
         *vp = (int16_t)clamp(*vp + accel(EN_K1 + k, s, TP[P_LEVEL].max - TP[P_LEVEL].min), TP[P_LEVEL].min,
                              TP[P_LEVEL].max);
-        motion_capture(&trk[k], P_LEVEL, *vp);
-        ml_knob(&trk[k], P_LEVEL);                      /* (MIDI LEARN: Tk LEVEL picked) */
+        motion_capture(t, P_LEVEL, *vp);
+        ml_knob(t, P_LEVEL);                            /* (MIDI LEARN: Tk LEVEL picked) */
     } else if (l == LAYER_EDIT) {                       /* ENG, No., FAV */
         if (k == 0u)
-            edit_load(eng_step(TSEL->eng_req, s), 0);
+            edit_load(eng_step_for(TSEL->eng_req, s, song.sel), 0);
         else if (k == 1u)
             edit_load(NENGINES, s);
         else if (k == 2u)
@@ -770,8 +786,8 @@ static uint32_t layer_oct(uint32_t pressed, uint32_t oct)
             }
         } else if (lys.l == LAYER_GLO) {
             for (k = 0; k < NTRK; k++) {
-                trk[k].p[P_MUTE] = lys.v[k];
-                trk[k].p[P_LEVEL] = lys.v[4u + k];
+                trk[k].p[P_MUTE] = lys.gm[k];
+                trk[k].p[P_LEVEL] = lys.gl[k];
             }
             song.g[G_BPM] = lys.v[8];
             ui_message("MIX PUT BACK");
@@ -803,9 +819,9 @@ static uint32_t layer_leds(uint32_t *br)
             e = perf_key(k);
             can = e < PF_N && ((ok >> e) & 1u);
             on = can && ((held >> e) & 1u);
-        } else if (l == LAYER_GLO) {                    /* sounding lit; SOLO held lit, the others, C4, F4 breathe */
-            on = b ? p < NTRK && glo_sounding(p) : (p < NTRK && ((lys.solo >> k) & 1u)) || (p == 5u && ui.ml.on);
-            can = !b && (p < NTRK || p == 4u || p == 5u || (p == 7u && !song.g[G_CLOCK]));
+        } else if (l == LAYER_GLO) {                    /* sounding lit; SOLO held lit, the others, G4 A4 B4 breathe */
+            on = b ? p < NTRK && glo_sounding(p) : (p < NTRK && ((lys.solo >> k) & 1u)) || (p == GLO_LEARN && ui.ml.on);
+            can = !b && (p < NTRK || p == GLO_ALL || p == GLO_LEARN || (p == GLO_TAP && !song.g[G_CLOCK]));
         } else if (l == LAYER_SCL) {                    /* the root lit, the scale's notes breathe */
             e = (k + 5u + 12u - root) % 12u;
             on = e == 0u;
@@ -838,13 +854,15 @@ static uint32_t layer_leds(uint32_t *br)
  * short name, 4 a row); the footer the keycaps. A cell: RAISE
  * (can be pressed), the selection's fill (the value now, SET), the accent (held, HOLD), DIM (cannot now: pressing
  * it says why), KEY (a muted track, as the MUTE badge); HOLD cells in a SET layer: a corner triangle */
-static const char B_NOTE[NTRK] = {'F', 'G', 'A', 'C'};  /* black keys 1..4: F# G# A# C# */
+static const char B_NOTE[NTRK] = {'F', 'G', 'A', 'C', 'D', 'F', 'G', 'A'};   /* black keys 1..8: F# G# A# C# D# F# G# A# */
 #define LC_X(c) (6 + 58 * (int32_t)(c))                 /* cell column c: 54 px wide, 4 px apart */
 #define LC_W 54
 #define LC_H 42                                          /* the big cells: rows at y 4 and 50 */
 #define LF_H 19                                          /* FX: the white keys' rows (F3 .. B3, C4 .. F4, G4 .. C5, D5 .. G5) */
 #define LM_Y 96                                          /* the black keys' row (22 px) */
 #define LM_H 22
+#define LM_W 25                                          /* FX's eight mutes: 25 px cells, 4 px apart */
+#define LM_X(e) (6 + 29 * (int32_t)(e))
 enum { LS_OFF, LS_SEL, LS_HELD, LS_WAIT, LS_DIM, LS_MUTE };
 /* 1.5 (#173): | LS_ALT, an idle (OFF, DIM) cell of the FX map's 2nd and 4th columns in a fill of its own, the columns
  * light / dark in turn as the piano roll's keys, so the effects are told apart at a glance: SURF -> TEXT 22 % (the
@@ -892,47 +910,55 @@ static uint16_t lc_box(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t fill
     cv_rrect(x, y, w, h, 4, fill, T_SURF);
     return fill;
 }
-static void lcell(int32_t x, int32_t y, int32_t h, const char *note, uint32_t icon, uint32_t icon2, const char *name,
-                  uint32_t st, int tri)
+static void lcell_w(int32_t x, int32_t y, int32_t w, int32_t h, const char *note, uint32_t icon, uint32_t icon2,
+                    const char *name, uint32_t st, int tri)
 {
     uint16_t ink, fill = lc_fill(st, &ink), idle = fill == T_RAISE || ((st & LS_ALT) && fill == lc_alt());
-    fill = lc_box(x, y, LC_W, h, fill);
+    fill = lc_box(x, y, w, h, fill);
     if (note)
         cv_text_on(x + 5, y + 3, &AF_S, note, idle ? T_MID : ink, fill);
     if (h > 30) {                                   /* the icon's cell over the name, 6 px between, centred */
         int32_t t = y + HALF_UP(h - (16 + 6 + AF_S_CAP_H));
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V | AL_N(2), "layer cell icon + name centred up/down");
-        GFX_HOOK_ALIGN(x, 0, x + LC_W, 0, AL_H | AL_PASS, "layer cell icon / name centred across");
-        cv_icon_in(x, t, LC_W, 0, 16, icon, ink, fill);
-        GFX_HOOK_ALIGN(x, 0, x + LC_W, 0, AL_H | AL_PASS, "layer cell icon / name centred across");
-        cv_text_in(x, t + 22 - AF_S_CAP_Y, LC_W, &AF_S, name, ink, fill);
+        GFX_HOOK_ALIGN(x, 0, x + w, 0, AL_H | AL_PASS, "layer cell icon / name centred across");
+        cv_icon_in(x, t, w, 0, 16, icon, ink, fill);
+        GFX_HOOK_ALIGN(x, 0, x + w, 0, AL_H | AL_PASS, "layer cell icon / name centred across");
+        cv_text_in(x, t + 22 - AF_S_CAP_Y, w, &AF_S, name, ink, fill);
     } else if (name && h > 24) {                           /* the same, 12 px, 2 px between (the icon at a side) */
         int32_t t = y + HALF_UP(h - (12 + 2 + AF_S_CAP_H));
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V | AL_N(2), "layer cell icon + name centred up/down");
-        cv_icon_on(note ? x + LC_W - 17 : x + 5, t, 12, icon, ink, fill);
-        GFX_HOOK_ALIGN(x, 0, x + LC_W, 0, AL_H | AL_PASS, "layer cell icon / name centred across");
-        cv_text_in(x, t + 14 - AF_S_CAP_Y, LC_W, &AF_S, name, ink, fill);
+        cv_icon_on(note ? x + w - 17 : x + 5, t, 12, icon, ink, fill);
+        GFX_HOOK_ALIGN(x, 0, x + w, 0, AL_H | AL_PASS, "layer cell icon / name centred across");
+        cv_text_in(x, t + 14 - AF_S_CAP_Y, w, &AF_S, name, ink, fill);
     } else if (name && *name) {                           /* a key's row: the icon and the name on its middle */
         if (!note && icon < ICON_COUNT) {                  /* (the EDIT layer: the engine's icon instead of the key) */
             GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "layer key cell icon / name centred up/down");
             cv_icon_in(x + 3, y, 0, h, 12, icon, ink, fill);
             GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "layer key cell icon / name centred up/down");
-            cv_text_r(x + LC_W - 3, y + CAP_IN(S, h), &AF_S, name, ink, fill);
+            cv_text_r(x + w - 3, y + CAP_IN(S, h), &AF_S, name, ink, fill);
         } else {
             GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "layer key cell icon / name centred up/down");
-            cv_text_r(x + LC_W - 5, y + CAP_IN(S, h), &AF_S, name, ink, fill);
+            cv_text_r(x + w - 5, y + CAP_IN(S, h), &AF_S, name, ink, fill);
         }
+    } else if (!name && !note) {                           /* NightShift: a narrow cell, icon2 alone (FX's eight mutes) */
+        GFX_HOOK_ALIGN(x, y, x + w, y + h, AL_HV, "layer narrow cell icon centred");
+        cv_icon_in(x, y, w, h, 12, icon2, ink, fill);
     } else if (!name) {                                    /* (an empty name: the note alone) */
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "layer key cell icon / name centred up/down");
-        cv_icon_in(x + LC_W - 31, y, 0, h, 12, icon, ink, fill);
+        cv_icon_in(x + w - 31, y, 0, h, 12, icon, ink, fill);
         GFX_HOOK_ALIGN(0, y, 0, y + h, AL_V, "layer key cell icon / name centred up/down");
-        cv_icon_in(x + LC_W - 17, y, 0, h, 12, icon2, ink, fill);
+        cv_icon_in(x + w - 17, y, 0, h, 12, icon2, ink, fill);
     }
     if (tri) {
         int32_t j;
         for (j = 0; j < 4; j++)
-            cv_rect(x + LC_W - 7 + j, y + 2 + j, 4 - j, 1, ink);
+            cv_rect(x + w - 7 + j, y + 2 + j, 4 - j, 1, ink);
     }
+}
+static void lcell(int32_t x, int32_t y, int32_t h, const char *note, uint32_t icon, uint32_t icon2, const char *name,
+                  uint32_t st, int tri)
+{
+    lcell_w(x, y, LC_W, h, note, icon, icon2, name, st, tri);
 }
 static void bnote(char *n, uint32_t t) { n[0] = B_NOTE[t]; n[1] = '#'; n[2] = 0; }
 
@@ -949,28 +975,32 @@ static void layer_fx(void)
         lcell(LC_X(p % 4u), 4 + (LF_H + 4) * (int32_t)(p / 4u), LF_H, n, 0, 0, e < PF_NFX ? PF_CELL[e] : "",
               st | (p & 1u ? LS_ALT : 0u), 0);           /* (#173: the 2nd and 4th columns' idle cells their own fill) */
     }
-    for (e = 0; e < NTRK; e++) {                        /* the mutes of the black keys 1..4 */
-        bnote(n, e);
-        lcell(LC_X(e), LM_Y, LM_H, n, ICON_MUTE, trk_icon(e, 0), 0, (held >> (PF_M1 + e)) & 1u ? LS_MUTE : LS_OFF, 0);
-    }
+    for (e = 0; e < NTRK; e++)                          /* the mutes of the black keys 1..8 (NightShift: a narrow cell
+                                                         * each, the track's number) */
+        lcell_w(LM_X(e), LM_Y, LM_W, LM_H, 0, ICON_MUTE, trk_icon(e, 0), 0, (held >> (PF_M1 + e)) & 1u ? LS_MUTE : LS_OFF, 0);
 }
+/* NightShift: eight tracks, the map in rows of four as FX's: F3..B3 and C4..F4 SOLO T1..T8, then G4 ALL, A4 LEARN, B4
+ * TAP, then the black keys 1..4 and 5..8 MUTE T1..T8 */
+#define GLO_H 21                                         /* its rows: y 4, 27, 50, 73, 96 */
 static void layer_glo(void)
 {
     uint32_t e;
     char n[3] = {0, 0, 0};
-    for (e = 0; e < NTRK; e++) {                        /* F3 .. B3: SOLO while held */
+    for (e = 0; e < NTRK; e++) {                        /* F3 .. F4: SOLO while held */
         n[0] = W_NOTE[e];
-        lcell(LC_X(e), 4, LC_H, n, trk_icon(e, 0), 0, "SOLO", (perf_solo >> e) & 1u ? LS_HELD : LS_OFF, 1);
+        lcell(LC_X(e % 4u), 4 + 23 * (int32_t)(e / 4u), GLO_H, n, trk_icon(e, 0), 0, "SOLO",
+              (perf_solo >> e) & 1u ? LS_HELD : LS_OFF, 1);
     }
-    n[0] = 'C';
-    lcell(LC_X(0), 50, LC_H, n, ICON_MUTE, 0, "ALL", LS_OFF, 0);   /* (unmute all) */
-    n[0] = 'D';
-    lcell(LC_X(1), 50, LC_H, n, ICON_MIDI, 0, "LEARN", ui.ml.on ? LS_SEL : LS_OFF, 0);   /* (MIDI LEARN, 1.5) */
-    n[0] = 'F';
-    lcell(LC_X(3), 50, LC_H, n, ICON_TEMPO, 0, "TAP", song.g[G_CLOCK] ? LS_DIM : LS_OFF, 0);
-    for (e = 0; e < NTRK; e++) {                        /* the black keys 1..4: MUTE, latched */
+    n[0] = W_NOTE[GLO_ALL];
+    lcell(LC_X(0), 50, GLO_H, n, ICON_MUTE, 0, "ALL", LS_OFF, 0);   /* (unmute all) */
+    n[0] = W_NOTE[GLO_LEARN];
+    lcell(LC_X(1), 50, GLO_H, n, ICON_MIDI, 0, "LEARN", ui.ml.on ? LS_SEL : LS_OFF, 0);   /* (MIDI LEARN, 1.5) */
+    n[0] = W_NOTE[GLO_TAP];
+    lcell(LC_X(2), 50, GLO_H, n, ICON_TEMPO, 0, "TAP", song.g[G_CLOCK] ? LS_DIM : LS_OFF, 0);
+    for (e = 0; e < NTRK; e++) {                        /* the black keys 1..8: MUTE, latched */
         bnote(n, e);
-        lcell(LC_X(e), LM_Y, LM_H, n, ICON_MUTE, trk_icon(e, 0), 0, trk[e].p[P_MUTE] ? LS_MUTE : LS_OFF, 0);
+        lcell(LC_X(e % 4u), 73 + 23 * (int32_t)(e / 4u), GLO_H, n, ICON_MUTE, trk_icon(e, 0), 0,
+              trk[e].p[P_MUTE] ? LS_MUTE : LS_OFF, 0);
     }
 }
 static void layer_scl(void)                             /* KNOB 2's scales, 4 x 4, the one now selected */
@@ -1115,11 +1145,12 @@ static void layer_cards(uint32_t l)
             fmt_int(val, 100 - perf_k[3]);
             draw_column(3, "DEPTH", val, "%", VAL(3u), (100 - perf_k[3]) * 10, ICON_MIX);
         }
-    } else if (l == LAYER_GLO) {                        /* T1..T4 LEVEL (the track's icon; muted: dim) */
-        for (c = 0; c < NTRK; c++) {
-            param_format(&TP[P_LEVEL], trk[c].p[P_LEVEL], val, &unit);
-            draw_column(c, "LEVEL", val, unit, glo_sounding(c) ? VAL(c) : T_DIM, RATIO(&TP[P_LEVEL], trk[c].p[P_LEVEL]),
-                        trk_icon(c, 1));
+    } else if (l == LAYER_GLO) {                        /* the bank's LEVEL (the track's icon; muted: dim) */
+        for (c = 0; c < 4u; c++) {
+            uint32_t t = trk_bank() + c;
+            param_format(&TP[P_LEVEL], trk[t].p[P_LEVEL], val, &unit);
+            draw_column(c, "LEVEL", val, unit, glo_sounding(t) ? VAL(c) : T_DIM, RATIO(&TP[P_LEVEL], trk[t].p[P_LEVEL]),
+                        trk_icon(t, 1));
         }
     } else if (l == LAYER_EDIT) {
         engine_columns();
@@ -1159,8 +1190,7 @@ static void draw_layer(void)
             sig = sig * 33u + perf_map[p];
     }
     else if (l == LAYER_GLO)
-        sig += perf_solo * 31u + (uint32_t)song.g[G_CLOCK] * 5u + ui.ml.on * 7u +
-               (uint32_t)(trk[0].p[P_MUTE] | trk[1].p[P_MUTE] << 1 | trk[2].p[P_MUTE] << 2 | trk[3].p[P_MUTE] << 3) * 131u;
+        sig += perf_solo * 31u + (uint32_t)song.g[G_CLOCK] * 5u + ui.ml.on * 7u + glo_mutes() * 131u;
     else if (l == LAYER_SCL)
         sig += (uint32_t)TSEL->p[P_SCALE] * 31u;
     else if (l == LAYER_REC)

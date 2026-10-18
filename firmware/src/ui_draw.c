@@ -874,8 +874,9 @@ static void draw_columns(void)
             const param_desc_t *d = home_param(c, &vp);
             param_format(d, *vp, val, &unit);
             card_mot_of(vp);
-            if (home_levels())                         /* 1.5: T1..T4 LEVEL, the track's cushion, muted: DIM */
-                draw_column(c, "LEVEL", val, unit, trk[c].p[P_MUTE] ? T_DIM : VAL(c), RATIO(d, *vp), trk_icon(c, 1));
+            if (home_levels())                         /* 1.5: the bank's LEVEL, the track's cushion, muted: DIM */
+                draw_column(c, "LEVEL", val, unit, home_trk(c)->p[P_MUTE] ? T_DIM : VAL(c), RATIO(d, *vp),
+                            trk_icon(trk_bank() + c, 1));
             else
                 draw_column(c, d->label, val, unit, VAL(c), RATIO(d, enum_rank(d, *vp)), param_icon(d, *vp));
         }
@@ -1198,7 +1199,8 @@ static void draw_columns(void)
 #define SPL_X0 ((240u - SPL_SQ) / 2u)               /* its top-left on the screen (x and y) */
 #define SPL_PAD 16                                  /* the text's inset: left (its ink), top and bottom (the capitals) */
 #define SPL_PITCH 20                                /* line to line */
-static const char *const SPLASH_LINES[] = {"Felucca", FELUCCA_VERSION, "H\xFCgelton Instruments", "with community"};
+static const char *const SPLASH_LINES[] = {"NightShift", FELUCCA_VERSION, "Felucca by H\xFCgelton", "with community"};
+                                                    /* (NightShift: an 8-track fork of Felucca, the maker's credit kept) */
 /* a band of two lines, h tall, at y on the screen: the first line's top at ly; the two lines' capitals declared
  * against al0..al1 (mode: AL_V the band centred there, AL_B the last baseline on al1) */
 static void splash_band(uint32_t y, uint32_t h, int32_t ly, const char *const *l, uint32_t mode, int32_t al0,

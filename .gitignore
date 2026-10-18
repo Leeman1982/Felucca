@@ -2,3 +2,5 @@ build/
 .DS_Store
 __pycache__/
 *.fwsc
+# NightShift: the Open Samples excerpts are made by tools/fetch_open_samples.py, not kept (assets/samples-os/ATTRIBUTION.txt)
+assets/samples-os/*/

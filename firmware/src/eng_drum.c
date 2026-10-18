@@ -33,13 +33,20 @@
  * block) do. A released key does not end a hit.
  *
  * State: 8 lanes per part in the part's engine memory (engines.c eng_mem; drum_kit_of: the parameters, coefficients, voice and metal
- * source of each lane). */
+ * source of each lane).
+ *
+ * NightShift: KIT LINN (stored 9) plays samples instead of the synthesized drums: the LinnDrum's hits of SAMPLE's LINN
+ * set (tools/gen_samples.py SMP_LINN_ZONES, Open Samples), one a lane (KICK SNARE CLAP HATCL HATOP TOM RIM BELL, the
+ * BELL a cowbell). A note plays its lane's hit at its GM semitones (DRUM_GM, as the synthesized kits); TUNE +-12
+ * semitones, TONE darker below 64 (a low-pass; 64 and up: as recorded), DECY shorter below 64 (64 and up: the whole
+ * hit), ACC and velocity, DRV, the lane LEVELs and mutes, the closed hat's choke of the open one as on every kit; SNAP
+ * and KICK do nothing on it. Without the samples in the build the lanes are silent. */
 #include "drum_voice.c"
 
-enum { DK_STD, DK_HAND, DK_CYM, DK_HCYM, DK_80, DK_10, DK_66, DK_55, DK_77, DK_COUNT };   /* (stored values) */
+enum { DK_STD, DK_HAND, DK_CYM, DK_HCYM, DK_80, DK_10, DK_66, DK_55, DK_77, DK_LINN, DK_COUNT };   /* (stored values) */
 /* the kit a stored KIT value plays: HAND CYM H+CYM (retired after 1.0.4) -> 66 (a conga on TOM), 10 (a cymbal on
  * BELL), 77 (claves on RIM, a cymbal on BELL) */
-static const uint8_t DK_PLAYS[DK_COUNT] = {DK_STD, DK_66, DK_10, DK_77, DK_80, DK_10, DK_66, DK_55, DK_77};
+static const uint8_t DK_PLAYS[DK_COUNT] = {DK_STD, DK_66, DK_10, DK_77, DK_80, DK_10, DK_66, DK_55, DK_77, DK_LINN};
 static uint32_t drum_kit_plays(int32_t v) { return DK_PLAYS[clamp(v, 0, DK_COUNT - 1)]; }
 /* the model kits' pieces where a lane plays another than its own (the lane's name): 1 TOM -> CONGA, 2 RIM -> CLAVE,
  * 4 BELL -> CYM */
@@ -56,10 +63,15 @@ typedef struct {
     uint8_t owner;               /* the voice playing the lane: index + 1, 0 = none */
     uint8_t role;                /* the drum struck (DVT_*) */
     int8_t st;                   /* its semitones from the designed pitch (the GM map) */
-    uint8_t pad;
+    uint8_t slive;               /* KIT LINN: the hit plays (1), is choked (2: to 0 over a block), 0 none */
+    uint32_t spos;               /* .. its next ADPCM sample, the decoder (spred, sidx), the interpolation (sa .. sb at */
+    uint16_t sfrac;              /* sfrac, Q16), the TONE low-pass (slp), the DECY envelope (senv, Q15) */
+    int16_t spred, sa, sb;
+    uint8_t sidx, spad[3];
+    int32_t slp, senv;
 } drum_lane_t;
 
-ENG_MEM_FITS("DRUM", sizeof(drum_lane_t) * DV_NLANE);
+ENG_MEM_ALL("DRUM", sizeof(drum_lane_t) * DV_NLANE);
 /* 1.4.1: each part's lanes muted (bit l: lane l), the EDIT layer's black keys 1..8 (ui_layer.c EQA_DRUM): a channel
  * mute. The lane plays on as always (hits, keys, MIDI: its voice, the CPU, the choke) and drum_render drops its output,
  * so unmuted it sounds as if it never was. Performance state: not saved, not recorded, no undo; a sound load into the
@@ -67,7 +79,7 @@ ENG_MEM_FITS("DRUM", sizeof(drum_lane_t) * DV_NLANE);
 static uint8_t drum_mute[NPART];
 
 /* 1..3 named as the kit they play: aliases, never shown or offered (EDITOR_PROTOCOL.md: retired values) */
-static const char *const N_DRUM_KIT[] = {"STD", "66", "10", "77", "80", "10", "66", "55", "77"};
+static const char *const N_DRUM_KIT[] = {"STD", "66", "10", "77", "80", "10", "66", "55", "77", "LINN"};
 static const char *const N_DRUM_KICK[] = {"PUNCH", "ROUND"};
 
 /* General MIDI notes 35..81 -> the drum (DVT_*; DVT_PUNCH: the kick KICK picks) and semitones from its
@@ -89,7 +101,7 @@ static uint32_t drum_gm(const int16_t *p, uint32_t note, int32_t *st)
     uint32_t n = note >= 35u && note <= 81u ? note : 36u + (note + 120u - 36u) % 12u, t = (uint32_t)DRUM_GM[n - 35u][0];
     uint32_t kit = drum_kit_plays(p[P_E0]);           /* STD, the model kits */
     *st = DRUM_GM[n - 35u][1];
-    if (kit >= DK_80)
+    if (kit >= DK_80 && kit < DK_LINN)
         return DV_KTYPE(kit - DK_80 + 1u, DV_TYPE_LANE[t]);
     return t == DVT_PUNCH && p[P_E6] > 0 ? DVT_ROUND : t;
 }
@@ -111,7 +123,7 @@ static uint32_t drum_lane(uint32_t note)
 static uint32_t drum_swaps(const track_t *t)
 {
     uint32_t kit = drum_kit_plays(t->p[P_E0]);
-    return kit >= DK_80 ? DK_SWAP[kit - DK_80] : 0u;
+    return kit >= DK_80 && kit < DK_LINN ? DK_SWAP[kit - DK_80] : 0u;
 }
 
 /* the lane's name as the track's KIT plays it (5 characters at most) */
@@ -206,6 +218,90 @@ static voice_t *drum_reuse(track_t *t, uint32_t note)
     return v->active && (uint32_t)v->s[0] == lane ? v : 0;
 }
 
+/* ---- NightShift: KIT LINN, the LinnDrum's samples on the lanes (see the top) ---- */
+#ifdef SMP_LINN_ZONES
+static const uint16_t LINN_Z[NLANE] = SMP_LINN_ZONES;   /* (DV_* lane order: KICK SNARE CLAP HATCL HATOP TOM RIM BELL) */
+#else
+static const uint16_t LINN_Z[NLANE] = {0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu};
+#endif
+_Static_assert(DV_KICK == 0 && DV_SNARE == 1 && DV_CLAP == 2 && DV_HATC == 3 && DV_HATO == 4 && DV_TOM == 5 &&
+               DV_RIM == 6 && DV_BELL == 7, "LINN_Z: the lanes in DRUM_LANE_NOTE's order");
+/* lane L's next sample (IMA ADPCM, as eng_sample.c sample_next; one-shot) */
+static inline int32_t linn_next(const smp_zone_t *z, drum_lane_t *L)
+{
+    uint32_t pos = L->spos, b = SMP_DATA[z->off + (pos >> 1)], code = (pos & 1u) ? b >> 4 : b & 15u;
+    int32_t step = IMA_STEP[L->sidx <= 88u ? L->sidx : 88u], vd = step >> 3;
+    if (code & 4u)
+        vd += step;
+    if (code & 2u)
+        vd += step >> 1;
+    if (code & 1u)
+        vd += step >> 2;
+    L->spred = (int16_t)clamp(L->spred + ((code & 8u) ? -vd : vd), -32768, 32767);
+    L->sidx = (uint8_t)clamp((int32_t)L->sidx + IMA_IDX[code & 7u], 0, 88);
+    L->spos = pos + 1u;
+    return L->spred;
+}
+static void linn_trigger(drum_lane_t *L, uint32_t lane)
+{
+    L->spos = 0;
+    L->sfrac = 0;
+    L->spred = L->sa = 0;
+    L->sidx = 0;
+    L->slp = 0;
+    L->senv = 32767;
+    L->slive = LINN_Z[lane] != 0xFFFFu && SMP_ZONES[LINN_Z[lane]].n;
+    L->sb = L->slive ? (int16_t)linn_next(&SMP_ZONES[LINN_Z[lane]], L) : 0;
+}
+/* n samples of lane L's hit into y (before the knee): 0 = nothing sounds (the voice ends: drum_amp) */
+__attribute__((noinline))                               /* (its own loop: drum_render's budget stays the voices') */
+static int linn_run(const track_t *t, const voice_t *v, drum_lane_t *L, int32_t *y, uint32_t n)
+{
+    const int16_t *p = t->p;
+    uint32_t i, lane = (uint32_t)v->s[0] & (DV_NLANE - 1u), frac = L->sfrac, stepq;
+    int32_t d = clamp(p[P_E3], 0, 127), e = L->senv, e1, de, lp, g, acc = clamp(p[P_E5] * v->vel * 4, 0, 65536);
+    const smp_zone_t *z;
+    if (!L->slive || LINN_Z[lane] == 0xFFFFu) {
+        L->slive = 0;
+        return 0;
+    }
+    z = &SMP_ZONES[LINN_Z[lane]];
+    stepq = (pow2_q16(clamp(L->st * 16 + (p[P_E1] - 64) * 3, -1536, 576)) >> 8) * (z->rate >> 8);   /* (Q16, as SAMPLE) */
+    e1 = L->slive == 2u ? 0 : d < 64 ? e - ((e * (64 - d) * (64 - d)) >> 15) : e;   /* DECY: a block's decay; choked: 0 */
+    de = (e1 - e) / (int32_t)n;
+    lp = p[P_E2] >= 64 ? 32767 : 4000 + p[P_E2] * 449;  /* TONE: the one-pole's coefficient (Q15) */
+    g = 20000 + (acc >> 3);                              /* ACC x velocity: 0.61 .. 0.86 */
+    for (i = 0; i < n; i++) {
+        int32_t s;
+        frac += stepq;
+        while (frac >= 65536u && L->slive) {
+            frac -= 65536u;
+            L->sa = L->sb;
+            if (L->spos >= z->n) {                       /* the hit's end: silent from here (no slope on past it) */
+                L->slive = 0;
+                L->sa = L->sb = 0;
+                frac = 0;
+            } else {
+                L->sb = (int16_t)linn_next(z, L);
+            }
+        }
+        s = L->sa + (((L->sb - L->sa) * (int32_t)(frac >> 1)) >> 15);
+        L->slp += lp < 32767 ? mulq15(s - L->slp, lp) : s - L->slp;
+        y[i] = mulq15(mulq15(L->slp, e), g);
+        e += de;
+        if (!L->slive && !L->sa) {                       /* (ended: the rest of the block silent) */
+            for (i++; i < n; i++)
+                y[i] = 0;
+            break;
+        }
+    }
+    L->sfrac = (uint16_t)(frac & 65535u);
+    L->senv = e1;
+    if (e1 < 33)                                         /* (rung out under -60 dB, or choked) */
+        L->slive = 0;
+    return 1;
+}
+
 static void drum_note_on(track_t *t, voice_t *v)
 {
     drum_lane_t *K = drum_kit_of(t), *L;
@@ -231,6 +327,14 @@ static void drum_note_on(track_t *t, voice_t *v)
     v->env = 1 << 24;                                    /* the ADSR held at full from here, not from drum_amp:
                                                           * a key-off before the first block (zero-length MIDI
                                                           * notes) would end a fresh voice at env 0 in env_tick */
+    if (drum_kit_plays(t->p[P_E0]) == DK_LINN) {         /* NightShift: the lane's sample from its start */
+        L->v.live = L->v.trig = 0;
+        linn_trigger(L, lane);
+        if (lane == DV_HATC && K[DV_HATO].slive)         /* (the closed hat chokes the open one) */
+            K[DV_HATO].slive = 2;
+        return;
+    }
+    L->slive = 0;
     dv_trigger(&L->v);
     if (lane == DV_HATC && K[DV_HATO].v.live)            /* a closed hat chokes the open one */
         dv_choke(&K[DV_HATO].v);
@@ -244,7 +348,7 @@ static int32_t drum_amp(track_t *t, voice_t *v, int32_t adsr)
     (void)adsr;
     if (!v->active)                                      /* (taken for another part: env_tick ended it) */
         return 0;
-    if (!L || (!L->v.live && !L->v.trig)) {
+    if (!L || (!L->v.live && !L->v.trig && !L->slive)) {
         v->active = v->gate = 0;
         v->stage = 0;
         v->env = 0;
@@ -274,6 +378,12 @@ static void drum_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const 
     }
     if (n > CTL)
         n = CTL;
+    if (drum_kit_plays(p[P_E0]) == DK_LINN) {            /* NightShift: the LinnDrum's hit, then the same DRV and knee */
+        if (!linn_run(t, v, L, y, n))
+            return;
+        goto out;
+    }
+    L->slive = 0;
     r = L->role;
     dv_default(&k, r);                                   /* the knobs move every lane from its design (64) */
     k.decay = (uint8_t)clamp(k.decay + p[P_E3] - 64, 0, 127);
@@ -291,6 +401,7 @@ static void drum_render(track_t *t, voice_t *v, int32_t *out, uint32_t n, const 
     if (dv_uses_metal(L->c.type) && (L->v.live || L->v.trig))
         dv_metal_run(&L->mb, mb, n);
     dv_run(&L->c, &L->v, mb, y, n);
+out:
     if ((drum_mute[(uint32_t)(t - trk) % NPART] >> ((uint32_t)v->s[0] & (DV_NLANE - 1u))) & 1u)
         return;                                          /* (a muted lane rings on unheard) */
     if (drv > 0) {                                       /* DRV: x1..x4 into the soft clip, the level kept (Q12) */
@@ -313,8 +424,10 @@ static int32_t drum_keys(const track_t *t, uint32_t k)
 }
 
 /* {KIT, TUNE, TONE, DECY, SNAP, ACC, KICK, DRV}; every kit suggests the BEAT pattern (GM notes) */
+#define DRUM_PRE_LINN 1                                  /* (engines.c: NightShift's track 7) */
 static const preset_t DRUM_PRESETS[] = {
     {"DRUM KIT", DRUM_KIT_E, {0, 100, 127, 100}, 0, 0, FX(0, 0, 0, 20), PAT(12)},   /* (core.h: SAMPLE PERC's too) */
+    {"LINN KIT", {DK_LINN, 64, 64, 64, 64, 100, 0, 0}, {0, 100, 127, 100}, 0, 0, FX(0, 0, 0, 16), PAT(12)},   /* NightShift */
 };
 
 static const engine_t ENG_DRUM = {

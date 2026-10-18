@@ -402,6 +402,22 @@ static int samples(void)
     bad += check("END cannot change published sample zones without BEGIN",
                  request(ED_SMP_END, a, n) == 8u && host_wire[6] == 2 && host_writes == 2 &&
                  usr_zone[0][0].rate == 65536u);
+    {   /* NightShift: USR3 holds 40 KiB (its upper half is tracks 5..8's store): no write or header past it */
+        n = pack7(data, 256, a + 4) + 4u;
+        a[0] = 2; a[1] = 0; a[2] = (0xA000u >> 7) & 127u; a[3] = 0xA000u >> 14;
+        i = host_writes;
+        bad += check("NightShift: a USR3 write past its 40 KiB is refused (rc 1), below it taken",
+                     request(ED_SMP_WRITE, a, n) == 11u && host_wire[9] == 1 && host_writes == i &&
+                     (a[2] = (0x9F00u >> 7) & 127u, a[1] = 0x9F00u & 127u, request(ED_SMP_WRITE, a, n) == 11u) &&
+                     !host_wire[9] && host_writes == i + 1u);
+        h.zone[0].rate = 65536; h.data_len = 0xA000u - SMP_USER_DATA + 1u;
+        a[0] = 2; n = pack7((const uint8_t *)&h, sizeof h, a + 1) + 1u;
+        bad += check("NightShift: a USR3 header longer than 40 KiB is refused (rc 2)",
+                     request(ED_SMP_END, a, n) == 8u && host_wire[6] == 2 && !usr_nz[2]);
+        n = request(ED_SMP_INFO, a, 0);
+        bad += check("NightShift: SMP_INFO ends with each slot's room (80 80 40 KiB)",
+                     n > 8u && host_wire[n - 4u] == 80 && host_wire[n - 3u] == 80 && host_wire[n - 2u] == 40);
+    }
     song.playing = 1; host_progress = 0; a[0] = 0; a[1] = 0;
     bad += check("user-preset STORE does not mutate RAM when audio cannot stop",
                  request(ED_UP_STORE, a, 2) == 8u && host_wire[6] == 2 && !up_used(0));
@@ -427,29 +443,36 @@ static int song_protocol(void)
     chain.armed = 0; a[0] = 2;
     bad += check("SONG PLAY refuses extra argument bytes", !request(ED_SONG, a, 2) && !transport_req);
     {   /* 1.2 (`57 01 04`): sections with a slot per track, ops 4..7; the v6 ops see each section's clock lane */
-        static const uint8_t set[] = {5, 2, 0, 1, CHAIN_SILENT, 0, 3, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, 1};
-        static const uint8_t q4[] = {4}, q0[] = {0}, bad5[] = {5, 1, 0, 0, 5, 0, 1}, old4[] = {1, 1, CHAIN_SILENT, 1};
+        /* (NightShift: eight lanes a section, 9 bytes a row; a row of Felucca's four lanes, 5 bytes, is taken too) */
+        static const uint8_t set[] = {5, 2, 0, 1, CHAIN_SILENT, 0, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, 3, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, 1};
+        static const uint8_t q4[] = {4}, q0[] = {0}, bad5[] = {5, 1, 0, 0, 5, 0, 0, 0, 0, 0, 1}, old4[] = {1, 1, CHAIN_SILENT, 1};
+        static const uint8_t set4[] = {5, 1, 1, 2, CHAIN_SILENT, 3, 2};
         static const uint8_t info[] = {0};
         uint32_t n, i, tag = 0;
         reset();
         n = request(ED_SONG, set, sizeof set);
-        bad += check("SONG op 5 sets sections (T1 A, T2 B, T3 -, T4 A x3; all - x1), the reply in lanes",
-                     n == 5u + 6u + 2u * 5u + 1u && host_wire[5] == 5 && !host_wire[6] && host_wire[7] == 2 &&
-                     !memcmp(host_wire + 11, set + 2, 10) && chain_config.count == 2 &&
-                     !memcmp(&chain_config.row[0], &(chain_row_t){{0, 1, CHAIN_SILENT, 0}, 3}, sizeof(chain_row_t)) &&
+        bad += check("SONG op 5 sets sections (T1 A, T2 B, T3 -, T4 A, T5..T8 - x3; all - x1), the reply in lanes",
+                     n == 5u + 6u + 2u * 9u + 1u && host_wire[5] == 5 && !host_wire[6] && host_wire[7] == 2 &&
+                     !memcmp(host_wire + 11, set + 2, 18) && chain_config.count == 2 &&
+                     !memcmp(&chain_config.row[0], &(chain_row_t){{0, 1, CHAIN_SILENT, 0, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT, CHAIN_SILENT}, 3}, sizeof(chain_row_t)) &&
                      chain_config.row[1].slot[0] == CHAIN_SILENT && chain_config.row[1].repeat == 1);
         n = request(ED_SONG, q4, 1);
-        bad += check("SONG op 4 queries them as set", n == 22u && host_wire[5] == 4 && !memcmp(host_wire + 11, set + 2, 10));
+        bad += check("SONG op 4 queries them as set", n == 30u && host_wire[5] == 4 && !memcmp(host_wire + 11, set + 2, 18));
         n = request(ED_SONG, q0, 1);
         bad += check("SONG op 0 (v6 editors): a row per section, its clock lane's slot (T1 A; all - : A)",
                      n == 16u && host_wire[11] == 0 && host_wire[12] == 3 && host_wire[13] == 0 && host_wire[14] == 1);
         bad += check("SONG op 5: a slot past - (5) refused, the sections kept",
-                     request(ED_SONG, bad5, sizeof bad5) == 22u && host_wire[6] == 1 && chain_config.count == 2);
+                     request(ED_SONG, bad5, sizeof bad5) == 30u && host_wire[6] == 1 && chain_config.count == 2);
         bad += check("SONG op 1 (v6): no - in a row of one slot", request(ED_SONG, old4, sizeof old4) == 16u &&
                      host_wire[6] == 1 && chain_config.count == 2);
         chain.armed = 1;
-        bad += check("SONG op 5 waits for a pending start (rc 2)", request(ED_SONG, set, sizeof set) == 22u && host_wire[6] == 2);
+        bad += check("SONG op 5 waits for a pending start (rc 2)", request(ED_SONG, set, sizeof set) == 30u && host_wire[6] == 2);
         chain.armed = 0;
+        n = request(ED_SONG, set4, sizeof set4);
+        bad += check("SONG op 5 of Felucca's four lanes (5-byte rows): tracks 5..8 on track 1's slot, the reply in eight",
+                     n == 5u + 6u + 9u + 1u && !host_wire[6] && chain_config.count == 1 &&
+                     !memcmp(&chain_config.row[0], &(chain_row_t){{1, 2, CHAIN_SILENT, 3, 1, 1, 1, 1}, 2}, sizeof(chain_row_t)));
+        request(ED_SONG, set, sizeof set);
         n = request(ED_INFO, info, 0);
         for (i = 5; i + 2u < n; i++)
             if (host_wire[i] == 0x57 && host_wire[i + 1u] == 1 && host_wire[i + 2u] == NTRK) tag = 1;
@@ -592,11 +615,11 @@ static int fm6_patches(void)
     a[1] = 5;
     request(ED_FM6_GET, a, 2);
     bad += check("an erased preset's patch is gone (GET rc 2)", host_wire[7] == 2u);
-    a[0] = ED_FM6_TRACK; a[1] = 4;
+    a[0] = ED_FM6_TRACK; a[1] = NTRK;
     request(ED_FM6_PUT, a, sizeof a);
     i = host_wire[7];
     request(ED_FM6_PUT, a, 20);
-    bad += check("FM6_PUT: a fifth track or a short record: rc 1", i == 1u && host_wire[7] == 1u);
+    bad += check("FM6_PUT: a ninth track (NightShift: eight) or a short record: rc 1", i == 1u && host_wire[7] == 1u);
     a[0] = 4; a[1] = 0;
     request(ED_FM6_GET, a, 2);
     bad += check("FM6_GET of an unknown target: rc 1", host_wire[7] == 1u);
@@ -875,7 +898,7 @@ static int menu_protocol(void)
         {"RESTORE LAST", "ON,OFF"}, {"SCALE LEDS", "OFF,ON"},                                        /* (1.2) */
         {"SCREEN OFF", "NEVER,5 MIN,15 MIN,30 MIN,60 MIN"},
         {"SCOPE", "OUT,MIX"}, {"STEP PREVIEW", "OFF,ON"}, {"CHORD ENTRY", "HOLD,ADD"},                  /* (1.2) */
-        {"MIDI IN", "CH1-4,SEL,CH5-8,CH9-12,CH13-16"}, {"TUNE", 0},   /* (1.2: the project's ROUT and TUNE; TUNE a number) */
+        {"MIDI IN", "CH1-8,SEL,CH5-12,CH9-16,CH13-16"}, {"TUNE", 0},   /* (1.2: the project's ROUT and TUNE; TUNE a number) */
         {"HOME", "SCOPE,TRACKS,LEVELS"},                                                       /* (1.3; 1.5: LEVELS) */
         {"HELP", "OFF,ON"}};                                                                         /* (1.5) */
     static const int32_t DEF[25] = {-1, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};   /* (COLOR: the default palette) */
@@ -1047,7 +1070,7 @@ static int menu_protocol(void)
  * one lands on that kit (the reply says so), a user preset sent with one loads as that kit */
 static int drum_kit_retired(void)
 {
-    static const uint8_t MAP[4] = {0, 6, 5, 8};
+    static const uint8_t MAP[NTRK] = {0, 6, 5, 8, 4, 5, 6, 7};   /* (KIT 4..7: 80 10 66 55, themselves) */
     static uint8_t a[16 + 2u * P_COUNT + 32u];
     int16_t got[P_COUNT];
     uint32_t r, i, k = 0, ok = 1;

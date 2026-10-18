@@ -56,7 +56,7 @@ static int ml_drop(uint32_t cc, uint32_t k, uint32_t id)
 static uint32_t ml_learn(uint32_t cc, uint32_t k, uint32_t id)
 {
     uint32_t i;
-    if (!ml_free_cc(cc) || k >= NTRK || id >= P_COUNT)
+    if (!ml_free_cc(cc) || k >= NTRK_V4 || id >= P_COUNT)
         return 2;
     (void)ml_drop(cc, k, id);
     for (i = 0; i < ML_N; i++)
@@ -106,6 +106,10 @@ static void ml_knob(const track_t *t, uint32_t id)
 {
     if (!ui.ml.on || id >= P_COUNT)
         return;
+    if (trk_index(t) >= NTRK_V4) {              /* NightShift: an entry holds the track in 2 bits (T1..T4) */
+        ui_message("LEARN: T1-T4 ONLY");
+        return;
+    }
     ui.ml.trk = (uint8_t)trk_index(t);
     ui.ml.id = (uint8_t)id;
     ui.ml.pick = 1;

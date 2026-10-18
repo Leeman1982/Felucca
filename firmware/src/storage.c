@@ -27,9 +27,13 @@
  * (up_fm6.c upf_boot); the first write of the new object goes to the sector that does not hold the bank's newest
  * copy (st_save_to), so a power cut never loses both.
  * The FM6 voice bank (1.4.1, fm6_vbank.c): 0xE7000, the sector above the autosave, with a commit record of the same
- * kind (type OBJ_FM6VB, not an st_load object); a new bank is first staged in the autosave's older copy (fm6_vbank.c). */
+ * kind (type OBJ_FM6VB, not an st_load object); a new bank is first staged in the autosave's older copy (fm6_vbank.c).
+ * NightShift: tracks 5..8 of the four projects (OBJ_PROJHI0.., project.c NSH1) at 0xD2000..0xD9FFF and of the autosave
+ * (OBJ_AUTOHI) at 0xDA000 / 0xDB000: the upper half of the third user sample slot, which is 40 KiB (eng_sample.c
+ * smp_slot_size; Felucca: 80). */
 enum { OBJ_SETTINGS, OBJ_PROJECT0, OBJ_UPRESET0 = OBJ_PROJECT0 + 4, OBJ_FM6BANK = OBJ_UPRESET0 + 2, OBJ_UPFM6,
-       OBJ_AUTOSAVE, OBJ_COUNT };
+       OBJ_AUTOSAVE, OBJ_PROJHI0, OBJ_AUTOHI = OBJ_PROJHI0 + 4, OBJ_COUNT };
+#define ST_HI_BASE 0xD2000u                    /* OBJ_PROJHI0's copy A; OBJ_AUTOHI's at + 8 sectors */
 #define OBJ_FM6VB 32u                          /* the voice bank's commit records (fm6_vbank.c; >= OBJ_COUNT: st_load
                                                 * never takes one, no object here takes its sectors) */
 
@@ -69,6 +73,8 @@ static uint32_t st_sector(uint32_t obj, uint32_t copy)  /* flash offset of copy 
         return copy ? 0xFE000u : 0x9F000u;
     if (obj == OBJ_AUTOSAVE)
         return 0xE5000u + copy * ST_SECTOR;
+    if (obj >= OBJ_PROJHI0)
+        return ST_HI_BASE + (obj - OBJ_PROJHI0) * 2u * ST_SECTOR + copy * ST_SECTOR;
     if (obj >= OBJ_UPRESET0)
         return 0xDC000u + (obj - OBJ_UPRESET0) * 2u * ST_SECTOR + copy * ST_SECTOR;
     return 0x97000u + (obj - OBJ_PROJECT0) * 2u * ST_SECTOR + copy * ST_SECTOR;
@@ -130,6 +136,28 @@ static int st_load(uint32_t obj, void *dst, uint32_t max)
     for (i = 0; i < h.len; i++)
         ((uint8_t *)dst)[i] = st_buf[i];
     return (int)h.len;
+}
+
+/* NightShift: load the copy of obj whose payload holds `want` in its last 4 bytes (a record's own sum: project.c's
+ * NSH1, named by its FUN10 record), the newer if both do; its length, -1 = neither does. Either copy may be the one:
+ * a power cut between the two records of a save leaves the older pair in charge */
+static int st_load_sum(uint32_t obj, void *dst, uint32_t max, uint32_t want)
+{
+    st_hdr_t h[2];
+    uint32_t c, i, best = 2;
+    for (c = 0; c < 2u; c++) {
+        uint32_t v;
+        if (obj >= OBJ_COUNT || st_head(obj, c, &h[c]) || h[c].len < 4u || h[c].len > max ||
+            st_read(st_sector(obj, c) + ST_PAYLOAD_OFF + h[c].len - 4u, &v, 4) || v != want)
+            continue;
+        if (best == 2u || (h[c].seq != h[best].seq && h[c].seq - h[best].seq < 0x80000000u))
+            best = c;
+    }
+    if (best == 2u || st_body(obj, best, &h[best]))
+        return -1;
+    for (i = 0; i < h[best].len; i++)
+        ((uint8_t *)dst)[i] = st_buf[i];
+    return (int)h[best].len;
 }
 
 /* save into copy `to` (0 A, 1 B; -1: the one that is not the current copy, as st_save) */

@@ -75,6 +75,14 @@ again from the source repositories. Without that folder the build still works, w
 instrument sets in the SAMPLE engine and no PIANO in SLICE (the PIANO set's middle C): they play a plain sine
 at the note's pitch instead, and the screen says NO SAMPLE.
 
+NightShift's Open Samples sounds (the SAMPLE sets 101 BASS, 4P BASS, JUNO STR, LINN and the DRUM kit LINN) are
+made, not kept: run `python3 tools/fetch_open_samples.py` once before `./build.sh`. It reads a checkout of
+<https://github.com/pumodi/open-samples> at `../open-samples` (or `OPEN_SAMPLES=path`), else downloads the four
+files (about 25 MB), and writes `assets/samples-os/*/` (ignored by git). Their licence is not CC0: see
+`assets/samples-os/ATTRIBUTION.txt`. Without them the four sets play a sine and the LINN kit is silent, and
+`tests/run_tests.sh` expects them (its checks of the SAMPLE and DRUM preset lists and the LINN renders were written
+with them; the suite has not been run without them): fetch them before running the tests.
+
 ## Browser emulator
 
 ```

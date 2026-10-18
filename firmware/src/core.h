@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
 /* FELUCCA core types: tracks, voices, engines, parameters.
- * Four tracks, each a synth part: its own engine, preset, parameters, voices and 64-step
+ * NightShift: eight tracks (Felucca has four), each a synth part: its own engine, preset, parameters, voices and 64-step
  * pattern. The parts share one budget of NVOICE sounding voices (voice.c). Drums are the DRUM
  * engine (General MIDI map) on any part; the SAMPLE engine's PERC set is retired (drum_from_perc).
  * Sections: sizes, parameters, voices and engines, tracks and the song, system. */
@@ -9,8 +9,13 @@
 
 /* ------------------------------------------------------------ sizes --- */
 #define NVOICE 8                 /* voices per part, and the budget shared by all parts */
-#define NPART 4                  /* synth parts: tracks 1..4 */
-#define NTRK NPART               /* tracks (the formats and the protocol count these): every track is a part */
+#define NPART 8                  /* synth parts: tracks 1..8 (NightShift; Felucca: 4) */
+#define NTRK NPART               /* tracks: every track is a part */
+#define NTRK_V4 4u               /* the tracks of every stored format up to FUN10 (and of Felucca's editor protocol): a
+                                  * project keeps tracks 1..4 in its FUN10 record as before, 5..8 in its second record
+                                  * (project.c NSH1); the frozen layouts below count these, never NTRK */
+#define NPART_BIG 4u             /* parts 1..4 have engine memory for every engine; 5..8 a small region: PHYS and GRAIN
+                                  * (engine_t.mem over ENG_MEM_SMALL, engines.c) play on tracks 1..4 only */
 #define NSTEP 64
 #define HALF_FRAMES 128          /* I2S half buffer: 2.9 ms at 44.1 kHz (a key waits 0..1 half, then plays 1 half later) */
 #ifndef FELUCCA_SLICE
@@ -272,16 +277,17 @@ static void step_set_nudge(step_t *s, int32_t v)
     uint32_t u = (uint32_t)(v < -8 ? -8 : v > 7 ? 7 : v) & 15u;
     s->flags = (uint8_t)((s->flags & ~SF_NUDGE) | (u & 7u) << 5 | (u >> 1 & 4u));
 }
-#define MOTION_MAX 128u          /* 1.2 (FUN10): 64 before */
-/* Four tracks x64 steps fit one byte. Values retain their signed parameter range (-64..127: an int8_t, 1.2).
+#define MOTION_MAX 128u          /* 1.2 (FUN10): 64 before; shared by the eight tracks */
+/* place: track << 6 | step (NightShift: 16 bits, eight tracks; a FUN10 record stores tracks 1..4's in one byte, the
+ * NSH1 record tracks 5..8's as track - 4). Values retain their signed parameter range (-64..127: an int8_t, 1.2).
  * param: the P_* id (< 128: P_COUNT is at most 127, project.c), bit 7 (MOTION_LOCK, 1.1) a parameter lock: the value
  * sounds on that step only and goes back after it (motion.c motion_step); without it an automation event, the
  * value holds until another one changes it. One record per (track, step, id), of either kind */
 #define MOTION_LOCK 0x80u
 #define MOTION_ID(e) ((uint32_t)(e)->param & 0x7Fu)
-typedef struct { uint8_t place, param; int8_t value; } motion_event_t;
-typedef struct { uint8_t count, on, rsv[2]; motion_event_t event[MOTION_MAX]; } motion_store_t;
-_Static_assert(sizeof(motion_store_t) == 388u, "motion disk layout (FUN10)");
+typedef struct { uint16_t place; uint8_t param; int8_t value; } motion_event_t;
+typedef struct { uint8_t count, on, rsv[2]; motion_event_t event[MOTION_MAX]; } motion_store_t;   /* on: a bit per track */
+#define MOTION_DISK 388u         /* FUN10's motion block: count, on, 2 reserved, MOTION_MAX x (place, id, value) bytes */
 #define CHAIN_ROWS 16u
 /* A song section (1.2, FUN10): the PROJECT slot each track plays (0..3, A..D; CHAIN_SILENT "-": that track plays
  * nothing there) and its repeats (1..16). Up to 1.1 a row was {slot, repeat}, all four tracks on that slot
@@ -292,12 +298,17 @@ typedef struct {
     uint8_t count, rsv[3];
     chain_row_t row[CHAIN_ROWS];
 } chain_config_t;
+typedef struct { uint8_t slot[NTRK_V4], repeat; } chain_row_v10_t;   /* frozen: FUN10's sections, four tracks */
+typedef struct {
+    uint8_t count, rsv[3];
+    chain_row_v10_t row[CHAIN_ROWS];
+} chain_v10_t;
 typedef struct { uint8_t slot, repeat; } chain_row_v9_t;   /* frozen: the rows of FUN6..FUN9 */
 typedef struct {
     uint8_t count, rsv[3];
     chain_row_v9_t row[CHAIN_ROWS];
 } chain_v9_t;
-_Static_assert(sizeof(chain_config_t) == 84u && sizeof(chain_v9_t) == 36u, "song chain layouts (FUN10 / FUN6..FUN9)");
+_Static_assert(sizeof(chain_v10_t) == 84u && sizeof(chain_v9_t) == 36u, "song chain layouts (FUN10 / FUN6..FUN9)");
 
 typedef struct track {
     int16_t p[P_COUNT];
@@ -389,7 +400,7 @@ typedef struct {
     int32_t batt_raw;            /* smoothed ADC ch3 (battery divider), 0 = not read yet */
 } song_t;
 
-static track_t trk[NTRK];        /* the instrument: four parts */
+static track_t trk[NTRK];        /* the instrument: eight parts */
 static song_t song;
 #define TSEL (&trk[song.sel])    /* the selected track */
 

@@ -107,14 +107,14 @@ int main(void)
     /* the user presets' FM6 patches (1.0.3) in the two sectors of the retired FM6 bank: 0x9F000 (after the projects)
      * and 0xFE000 (after the settings); the two objects share them, told apart by the commit record's type */
     bad += check("FM6 user preset patches (and the retired bank) in the sectors 0x9F000 / 0xFE000",
-                 OBJ_UPFM6 == OBJ_COUNT - 2 && OBJ_FM6BANK == OBJ_UPFM6 - 1 && st_sector(OBJ_UPFM6, 0) == 0x9F000u &&
+                 OBJ_UPFM6 == OBJ_AUTOSAVE - 1 && OBJ_FM6BANK == OBJ_UPFM6 - 1 && st_sector(OBJ_UPFM6, 0) == 0x9F000u &&
                      st_sector(OBJ_PROJECT0 + 3, 1) + 4096 == 0x9F000u && st_sector(OBJ_UPFM6, 1) == 0xFE000u &&
                      st_sector(OBJ_FM6BANK, 0) == 0x9F000u && st_sector(OBJ_FM6BANK, 1) == 0xFE000u &&
                      st_sector(OBJ_SETTINGS, 1) + 4096 == 0xFE000u);
     /* the autosave (1.2, project.c): its own pair 0xE5000 / 0xE6000, above the OTA staging, apart from every other
      * object; a save there touches no other object */
     {
-        uint32_t o, c, ok = OBJ_AUTOSAVE == OBJ_COUNT - 1 && st_sector(OBJ_AUTOSAVE, 0) == 0xE5000u &&
+        uint32_t o, c, ok = OBJ_AUTOSAVE == OBJ_PROJHI0 - 1 && st_sector(OBJ_AUTOSAVE, 0) == 0xE5000u &&
                                st_sector(OBJ_AUTOSAVE, 1) == 0xE6000u;
         static uint8_t snap[0x100000];
         for (o = 0; o < OBJ_AUTOSAVE; o++)
@@ -124,6 +124,46 @@ int main(void)
         ok &= st_save(OBJ_AUTOSAVE, a, sizeof a) == 0 && st_load(OBJ_AUTOSAVE, got, sizeof got) == (int)sizeof a &&
               !memcmp(got, a, sizeof a) && !memcmp(snap, nor, 0xE5000u) && !memcmp(snap + 0xE7000u, nor + 0xE7000u, 0x19000u);
         bad += check("the autosave in its own sectors 0xE5000 / 0xE6000, nothing else touched", ok);
+    }
+    /* NightShift: tracks 5..8 of the four projects and of the autosave (project.c NSH1) in 0xD2000 .. 0xDBFFF, the upper
+     * half of the third user sample slot (40 KiB since); each object its own pair, a save touches nothing else */
+    {
+        uint32_t o, c, p, q, ok = OBJ_AUTOHI == OBJ_PROJHI0 + 4u && OBJ_COUNT == OBJ_AUTOHI + 1u;
+        static uint8_t snap[0x100000];
+        for (o = OBJ_PROJHI0; o < OBJ_COUNT; o++)
+            for (c = 0; c < 2u; c++) {
+                uint32_t s = st_sector(o, c);
+                ok &= s >= 0xD2000u && s + 4096u <= 0xDC000u;
+                for (p = 0; p < OBJ_COUNT; p++)
+                    for (q = 0; q < 2u; q++)
+                        if (p != o || q != c)
+                            ok &= st_sector(p, q) != s;
+            }
+        for (o = OBJ_PROJHI0; o < OBJ_COUNT; o++) {
+            uint32_t s0 = st_sector(o, 0) < st_sector(o, 1) ? st_sector(o, 0) : st_sector(o, 1);
+            memcpy(snap, nor, sizeof nor);
+            ok &= st_save(o, a, sizeof a) == 0 && st_load(o, got, sizeof got) == (int)sizeof a && !memcmp(got, a, sizeof a);
+            ok &= !memcmp(snap, nor, s0) && !memcmp(snap + s0 + 0x2000u, nor + s0 + 0x2000u, sizeof nor - s0 - 0x2000u);
+        }
+        bad += check("NightShift: tracks 5..8 (projects, autosave) in 0xD2000 .. 0xDBFFF, a pair each, nothing else touched", ok);
+    }
+    /* st_load_sum: the copy whose payload ends in the asked word, the newer of two; neither: none */
+    {
+        static uint8_t x[3840], y[3840], z[3840], g4[3840];
+        uint32_t sx = 0x11111111u, sy = 0x22222222u, sz = 0x33333333u, ok;
+        memset(x, 0xA1, sizeof x); memcpy(x + sizeof x - 4u, &sx, 4);
+        memset(y, 0xB2, sizeof y); memcpy(y + sizeof y - 4u, &sy, 4);
+        memset(z, 0xC3, sizeof z); memcpy(z + sizeof z - 4u, &sz, 4);
+        ok = st_save(OBJ_PROJHI0 + 1, x, sizeof x) == 0 && st_save(OBJ_PROJHI0 + 1, y, sizeof y) == 0;
+        ok &= st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sx) == (int)sizeof x && !memcmp(g4, x, sizeof x);   /* the older */
+        ok &= st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sy) == (int)sizeof y && !memcmp(g4, y, sizeof y);   /* the newer */
+        ok &= st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sz) < 0;
+        ok &= st_save(OBJ_PROJHI0 + 1, z, sizeof z) == 0 && st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sx) < 0 &&
+              st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sz) == (int)sizeof z;   /* (x was overwritten) */
+        nor[st_sector(OBJ_PROJHI0 + 1, 0) + ST_PAYLOAD_OFF + 7u] ^= 0x40u;   /* a damaged payload: its CRC fails */
+        nor[st_sector(OBJ_PROJHI0 + 1, 1) + ST_PAYLOAD_OFF + 7u] ^= 0x40u;
+        ok &= st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sz) < 0 && st_load_sum(OBJ_PROJHI0 + 1, g4, sizeof g4, sy) < 0;
+        bad += check("st_load_sum: the copy holding the asked sum (older or newer), none when neither or damaged", ok);
     }
     {
         static uint8_t bank[3472], back[3728], tab[3728];

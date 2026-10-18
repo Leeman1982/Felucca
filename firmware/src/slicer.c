@@ -9,16 +9,20 @@
  *   P_SLDEPTH GATE: how far a '.' step closes (100 % = silent); STUT: the level of the repeat
  * GATE: the gain moves at most 1 / SL_RAMP per sample (2.9 ms from open to closed): a closing
  *   ramp ends on the step boundary, an opening one starts on it.
- * STUT: an 'x' step plays live and is recorded (22.05 kHz, 16 bit, SL_LEN samples a track); a '.'
+ * STUT: an 'x' step plays live and is recorded (22.05 kHz, 16 bit, SL_LEN samples a buffer); a '.'
  *   step plays that recording from its start, looped at the step length (halved until it fits the
  *   recording), cross-faded with the live sound by DEPTH. Every pass of the loop is windowed
  *   (SL_RAMP at both ends and at the step end), the cross-fade moves as the gate does.
  * The step clock: per track, always running (also with the SLICER OFF, so switching it on lands
  * in time), restarted with the transport (seq_start -> slicer_start: step 0 starts with the
  * sequencer's step 0), BPM and the track's + the global SWING as the sequencer has them (seq.c
- * step_samples); sample exact. With the SLICER OFF and no ramp left, the signal is not touched. */
+ * step_samples); sample exact. With the SLICER OFF and no ramp left, the signal is not touched.
+ * NightShift: SL_NBUF recordings for the eight tracks (one each would not fit the SRAM): a track takes a free one when
+ * its SLICER is STUT at a step's start and gives it back at the first step that is not; while all are taken, a
+ * further STUT track plays its '.' steps live (as while perform.c has them: sl_lent). */
 #define SL_NPAT 16
-#define SL_LEN 4096u                    /* recording, 22.05 kHz samples a track: 186 ms, 8 KB */
+#define SL_LEN 4096u                    /* recording, 22.05 kHz samples a buffer: 186 ms, 8 KB */
+#define SL_NBUF 4u                      /* the recordings (NightShift: shared by the eight tracks) */
 #define SL_RAMP_LOG2 7
 #define SL_RAMP (1 << SL_RAMP_LOG2)     /* 128 samples, 2.9 ms */
 #define SL_SLOPE (32768 / SL_RAMP)
@@ -45,7 +49,7 @@ static const uint16_t SL_PAT[SL_NPAT] = {
 };
 static const uint8_t SL_DEN[6] = {2, 4, 8, 3, 6, 12};   /* P_SLRATE (N_SLDIV): a step = 1 / DEN beats */
 
-static int16_t sl_buf[NTRK][SL_LEN] __attribute__((section(".pool")));
+static int16_t sl_buf[SL_NBUF][SL_LEN] __attribute__((section(".pool")));
 typedef struct {
     uint32_t pos, len;           /* samples into the step, its length */
     uint32_t base;               /* the step without swing */
@@ -57,8 +61,31 @@ typedef struct {
     uint8_t idx;                 /* step 0..15 */
     uint8_t bit;                 /* this step's pattern bit (latched at its start) */
     uint8_t rec_on;              /* recording this step */
+    uint8_t own;                 /* the sl_buf it records into + 1, 0 = none */
 } sl_t;
 static sl_t sl[NTRK];
+
+/* s's recording at a step's start: a STUT track takes a free one (0 = none free), another gives its own back. Which
+ * are taken is read from the tracks themselves (no second record to go out of step with them) */
+static int sl_claim(sl_t *s, uint32_t stut)
+{
+    uint32_t j, k, used = 0;
+    if (!stut || s->own) {
+        if (!stut)
+            s->own = 0;
+        return s->own != 0;
+    }
+    for (k = 0; k < NTRK; k++)
+        if (sl[k].own)
+            used |= 1u << (sl[k].own - 1u);
+    for (j = 0; j < SL_NBUF; j++)
+        if (!((used >> j) & 1u)) {
+            s->own = (uint8_t)(j + 1u);
+            return 1;
+        }
+    return 0;
+}
+static int16_t *sl_rec_buf(const sl_t *s) { return sl_buf[s->own ? s->own - 1u : 0u]; }
 static uint8_t sl_lent;          /* perform.c has borrowed sl_buf: STUT plays live, records nothing */
 
 static void slicer_start(void)   /* seq_start: the next block starts step 0 of every track */
@@ -84,7 +111,7 @@ static void sl_enter(const track_t *t, sl_t *s)
     s->rp = 0;
     s->loop = 0;
     s->rec_on = 0;
-    if (mode != SL_STUT || sl_lent) {
+    if (!sl_claim(s, mode == SL_STUT) || sl_lent) {
         s->rec = 0;                                 /* nothing old to repeat when STUT comes on */
     } else if (s->bit) {
         s->rec = 0;                                 /* a live step: record it */
@@ -169,7 +196,7 @@ static void slicer_track(const track_t *t, int32_t *b, uint32_t n)
         if (m > n - i)
             m = n - i;
         if (act)
-            sl_seg(t, s, sl_buf[k], b + i, 0, m);
+            sl_seg(t, s, sl_rec_buf(s), b + i, 0, m);
         s->pos += m;
         i += m;
     }
@@ -189,7 +216,7 @@ static __attribute__((noinline)) void slicer_track_sd(const track_t *t, int32_t 
         if (m > n - i)
             m = n - i;
         if (act)
-            sl_seg(t, s, sl_buf[k], b + i, sd + i, m);
+            sl_seg(t, s, sl_rec_buf(s), b + i, sd + i, m);
         s->pos += m;
         i += m;
     }

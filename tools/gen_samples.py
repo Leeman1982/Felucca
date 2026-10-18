@@ -35,6 +35,12 @@ no data of its own, only its slice table (one AUTO slice, the note's attack): SL
 (1.2 .. 1.4.1 kept a copy of that zone after BREAK, as their PIANO had none; 1.5 shares it again.)
 Without the CC0 library (no PIANO set) it has no material (SLICE plays a sine there).
 
+NightShift: the Open Samples sets (assets/samples-os/, tools/fetch_open_samples.py; not CC0: see that script) come
+after the three user slots, SET 8 on (the user slots keep 5..7, every stored SET value plays what it did): 101 BASS,
+4P BASS, JUNO STR (looped sustains), LINN (a kit: a zone a GM note, the DRUM lanes' notes; eng_drum.c's KIT LINN plays
+its zones on the lanes too). Their presets follow SAMPLE's others (SMP_PRESET_TABLE 5 on; 4, once PERC, stays hidden:
+SMP_PRESET_ORIG). Without assets/samples-os/ they are named sets without data (they play the missing-sample sine).
+
   gen_samples.py OUT.h                                       the header (tools/build.py)
   gen_samples.py --user-slot PIANO "PIANO HD" build/piano_hd/PIANO_HD
                   a CC0 set as built from its own files (PIANO: the 5 zones of 1.0 .. 1.1.5, 1.5) as a user slot:
@@ -63,6 +69,25 @@ SRC = Path(__file__).resolve().parents[1]
 GENDIR = SRC / "build" / "genwav"
 CACHE = SRC / "build" / "gen_samples.cache"
 CC0 = SRC / "assets" / "samples-cc0"
+OS = SRC / "assets" / "samples-os"
+USER_SLOTS = 3                               # eng_sample.c SMP_USER_SLOTS: the SET values after the built-in sets
+# NightShift's Open Samples sets: (name, directory, kind, stored rate, s kept, loop start s, loop crossfade s, roots kept)
+OS_SETS = [("101 BASS", "101BASS", "sus", 16000, 0.55, 0.22, 0.05, (36, 48)),
+           ("4P BASS", "4PBASS", "sus", 16000, 0.55, 0.22, 0.05, (24, 36)),
+           ("JUNO STR", "JUNOSTR", "sus", 16000, 0.80, 0.28, 0.16, (36, 48, 60)),
+           ("LINN", "LINN", "kit", 0, 0, 0, 0, None)]
+# LINN's hits (file name role): (stored rate, s kept, s of the fade-out at the end)
+LINN_KEEP = {"kick": (16000, 0.30, 0.06), "snare": (22050, 0.26, 0.08), "clap": (22050, 0.30, 0.10),
+             "hatcl": (22050, 0.12, 0.04), "hatop": (22050, 0.42, 0.15), "tom": (16000, 0.40, 0.12),
+             "rim": (22050, 0.12, 0.04), "bell": (22050, 0.26, 0.10)}
+LINN_LANES = (36, 38, 39, 42, 46, 45, 37, 56)  # eng_drum.c DRUM_LANE_NOTE: KICK SNARE CLAP HATCL HATOP TOM RIM BELL
+# their presets: (name, set, {E0..E7 but SET}, env A D S R, mono, fx sends dist chorus delay reverb, PAT, category)
+OS_PRESETS = [("101 BASS", "101 BASS", (0, 0, 1, 127, 0, 0, 0), (0, 82, 112, 18), 1, (0, 0, 0, 6), 2, "B"),
+              ("101 PLUCK", "101 BASS", (0, 0, 1, 110, 0, 18, 0), (0, 52, 0, 16), 1, (0, 0, 10, 10), 1, "B"),
+              ("4P BASS", "4P BASS", (0, 0, 1, 127, 0, 0, 0), (0, 90, 118, 22), 1, (0, 0, 0, 4), 8, "B"),
+              ("JUNO STR", "JUNO STR", (0, 0, 1, 127, 0, 0, 0), (44, 80, 120, 70), 0, (0, 50, 0, 46), 5, "P"),
+              ("SLOW STR", "JUNO STR", (0, 0, 1, 104, 0, 0, 0), (84, 90, 124, 92), 0, (0, 64, 12, 60), 5, "P")]
+# (LINN has no SAMPLE preset: its hits sit on their GM keys only; DRUM's LINN KIT plays them on the lanes and the grid)
 TR = 22050                                   # stored sample rate
 
 # CC0 library: set -> kind ("oneshot" decaying, "sus" looped sustain, "kit" one sample per key)
@@ -263,6 +288,55 @@ class Builder:
         self.alias = {}                         # set index -> the set index it aliases
         self.brk = None
         self.pno = None
+        self.os = []                            # NightShift: (name, z0, nz, kind) after the user slots
+
+    def os_set(self, name, d, kind, tr, keep, ls, xf, roots):
+        """an Open Samples set from assets/samples-os/d (tools/fetch_open_samples.py): its files named ..._<MIDI>.wav (a
+        kit: <GM key>_<role>.wav); none there: the set without data (one empty zone)"""
+        files = sorted((OS / d).glob("*.wav"))
+        entries = []
+        for p in files:
+            m = re.search(r"(\d+)(?:_[a-z]+)?\.wav$", p.name) if kind != "kit" else re.match(r"(\d+)_([a-z]+)", p.name)
+            root = int(m.group(1))
+            if kind != "kit" and roots and root not in roots:
+                continue
+            sr, x = wav(p)
+            if kind == "kit":
+                rate, k, fade = LINN_KEEP[m.group(2)]
+                x = resample(x, sr, rate)[:int(k * rate)]
+                f = int(fade * rate)
+                cos_fade(x, min(f, len(x) // 2))
+                loop = None
+                r16 = root * 16
+            else:
+                rate = tr
+                det = hz_to_midi(detect_hz(x, sr))
+                r16 = int(round((det if abs(det - root) < 0.5 else root) * 16))   # (the recording's own tuning)
+                x = resample(x, sr, rate)[:int(keep * rate)]
+                n, a, w = len(x), int(ls * rate), int(xf * rate)
+                for i in range(w):                    # crossfaded sustain loop a .. n - 1, as cc0_entries' "sus"
+                    t = i / w
+                    x[n - 1 - w + i] = x[n - 1 - w + i] * (1 - t) + x[a - w + i] * t
+                loop = (a, n - 1)
+            pk = peak(x)
+            s = [int(v * 30000 / pk) for v in x]
+            lsamp, lend = loop if loop else (len(s), len(s))
+            off, st = self.add(s, lsamp)
+            entries.append(dict(off=off, n=len(s), ls=lsamp, le=lend, looped=bool(loop), sr=rate, root16=r16,
+                                pred=st[0], idx=st[1], key=root if kind == "kit" else None))
+        z0 = len(self.zones)
+        if not entries:
+            self.zones.append(dict(off=0, n=0, ls=0, le=0, looped=False, sr=TR, root16=960, pred=0, idx=0, lo=0, hi=127))
+        elif kind == "kit":
+            for e in entries:
+                e["lo"] = e["hi"] = e["key"]
+            self.zones += entries
+        else:
+            entries.sort(key=lambda e: e["root16"])
+            for e, (lo, hi) in zip(entries, key_split([e["root16"] // 16 for e in entries])):
+                e["lo"], e["hi"] = lo, hi
+            self.zones += entries
+        self.os.append((name, z0, max(1, len(entries)), kind))
 
     def slice_break(self):
         """SLICE's BREAK, after every set; its slice table: decoder states at k * len / SLC_GRID, the hits"""
@@ -349,11 +423,17 @@ class Builder:
             L.append(f'    {{"{name}", {z0}, {nz}}},')
         if not sets:
             L.append('    {"NONE", 0, 1},')
+        for name, z0, nz, _ in self.os:
+            L.append(f'    {{"{name}", {z0}, {nz}}},   /* NightShift: Open Samples */')
         L.append("};")
-        L.append(f"#define SMP_NSETS {max(1, len(sets))}")
+        nb = max(1, len(sets))
+        L.append(f"#define SMP_NBASE {nb}   /* the sets before the user slots (SET 0 .. SMP_NBASE - 1) */")
+        L.append(f"#define SMP_NSETS {nb + len(self.os)}   /* every built-in set: SMP_NBASE, then the Open Samples sets "
+                 f"(SET SMP_NBASE + SMP_USER_SLOTS ..) */")
         named = sets or [("NONE", 0, 0)]
         perc = PERC_SLOT if len(named) > PERC_SLOT else len(named)
-        L.append(f"#define SMP_NPRESETS {perc}")
+        npre = len(named) + len(OS_PRESETS) if self.os else perc
+        L.append(f"#define SMP_NPRESETS {npre}")
         if len(named) > PERC_SLOT:
             L.append(f"#define SMP_PERC_SLOT {PERC_SLOT}   /* once PERC (the GM kit): an alias, its sounds load as DRUM */")
         L.append("/* the initializers from SMP_NPRESETS on (the retired PERC's alias) are outside factory browsing */")
@@ -365,14 +445,37 @@ class Builder:
             pat = ", PAT(12)" if k == "kit" else ""     # a kit: engines.c PATTERNS[11] BEAT
             si = self.alias.get(i, i)                   # an alias: the original's preset (hidden by its name)
             L.append(f'    {{"{name}", {{{si}, 0, 0, {loop}, 127, 0, 0, 0}}, {{{a}, {d}, {s_}, {r}}}, 0, 0{pat}}},')
+        osv = {name: nb + USER_SLOTS + j for j, (name, _, _, _) in enumerate(self.os)}
+        if self.os:
+            for name, sname, e, env, mono, fx, pat, _ in OS_PRESETS:
+                ev = ", ".join(map(str, (osv[sname],) + e))
+                L.append(f'    {{"{name}", {{{ev}}}, {{{", ".join(map(str, env))}}}, 0, {mono}, '
+                         f'FX({", ".join(map(str, fx))}), PAT({pat})}},   /* NightShift */')
         L.append("};")
         orig = [self.alias.get(i, i) for i in range(len(named))]
-        L.append("/* SET i plays SMP_SET_ORIG[i]: != i for a retired set kept as an alias (its preset i too) */")
-        L.append("static const uint8_t SMP_SET_ORIG[] = {" + ", ".join(map(str, orig)) + "};")
-        L.append(f"#define SMP_NALIAS {sum(1 for i, o in enumerate(orig) if o != i and i < perc)}   /* among the presets */")
+        porig = orig + list(range(len(named), npre)) if self.os else orig
+        L.append("/* SET i plays SMP_SET_ORIG[i]: != i for a retired set kept as an alias (the user slots and the Open Samples")
+        L.append(" * sets: themselves) */")
+        L.append("static const uint8_t SMP_SET_ORIG[] = {" + ", ".join(map(str, orig + list(range(nb, nb + USER_SLOTS +
+                 len(self.os))))) + "};")
+        L.append("/* preset k stands for SMP_PRESET_ORIG[k]: != k for a retired one (browsing skips it) */")
+        L.append("static const uint8_t SMP_PRESET_ORIG[] = {" + ", ".join(map(str, porig)) + "};")
+        L.append(f"#define SMP_NALIAS {sum(1 for i, o in enumerate(porig) if o != i and i < npre)}   /* among the presets */")
         names = ", ".join(f'"{n}"' for n, _, _ in named)
         L.append("#define SMP_SET_NAMES_INIT " + names)
+        L.append("#define SMP_OS_NAMES_INIT " + (", ".join(f'"{n}"' for n, _, _, _ in self.os) or '"NONE"'))
+        L.append(f"#define SMP_NOS {len(self.os)}")
         L.append("static const char *const SMP_SET_NAMES[] = {" + names + "};")
+        if self.os:
+            pre = {n: len(named) + j for j, (n, *_) in enumerate(OS_PRESETS)}
+            L.append(f"#define SMP_PRE_BASS {pre['101 BASS']}   /* the presets NightShift's tracks 5 and 6 start with */")
+            L.append(f"#define SMP_PRE_STR {pre['JUNO STR']}")
+            L.append("#define SMP_OS_CATS \"" + "".join(c for *_, c in OS_PRESETS) + "\"   /* category.c's letters */")
+            j = next(j for j, o in enumerate(self.os) if o[0] == "LINN")
+            z0, nz = self.os[j][1], self.os[j][2]
+            keyz = {self.zones[z]["lo"]: z for z in range(z0, z0 + nz) if self.zones[z]["n"]}
+            L.append("/* DRUM's KIT LINN (eng_drum.c): the LINN zone of each lane (KICK .. BELL), 0xFFFF none */")
+            L.append("#define SMP_LINN_ZONES {" + ", ".join(str(keyz.get(k, 0xFFFF)) for k in LINN_LANES) + "}")
         L += self.break_header()
         L += self.piano_header()
         return "\n".join(L) + "\n"
@@ -410,6 +513,8 @@ class Builder:
         brk = f", SLICE BREAK {self.brk['n']} samples" if self.brk else ""
         own = self.pno and not any(z["off"] == self.pno["off"] for z in self.zones)
         brk += f", SLICE PIANO ({'own copy' if own else 'shared'}) {self.pno['n']} samples" if self.pno else ""
+        osb = sum(((self.zones[z]["n"] + 1) // 2 for _, z0, nz, _ in self.os for z in range(z0, z0 + nz)))
+        brk += f"; Open Samples: {len(self.os)} sets, {osb} B" if self.os else ""
         return f"samples: {len(self.sets)} sets, {len(self.zones)} zones, {len(self.blob)} B ADPCM{brk}"
 
 
@@ -428,6 +533,7 @@ def input_key(have_cc0):
     files = sorted(GENDIR.glob("*.wav"))
     if have_cc0:
         files += sorted(CC0.glob("*/*.wav"))
+    files += sorted(OS.glob("*/*.wav"))
     for p in files:
         h.update(str(p.relative_to(SRC)).encode() + b"\0")
         h.update(hashlib.sha256(p.read_bytes()).digest())
@@ -455,6 +561,8 @@ def main(out):
                 b.alias_set(name)
             else:
                 b.cc0_set(name, kind)
+    for name, d, kind, tr, keep, ls, xf, roots in OS_SETS:   # NightShift (after the sets: their offsets stay)
+        b.os_set(name, d, kind, tr, keep, ls, xf, roots)
     if slice_on():                                  # SLICE's BREAK: only when that engine is built
         b.slice_break()                             # last: the sets' offsets stay as they were
         b.slice_piano()                             # (no data of its own: the PIANO set's)

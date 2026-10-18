@@ -55,7 +55,7 @@ static const struct { const char *title, *hint; } HELP_PAGE[] = {
     {"CLOCK", "[SELECT]TEMPO[GLO]HOLD: TAP"},
 };
 #define H_HOME "[PRESETS]SOUND[HOME]HOLD: MENU"
-#define H_LEVELS "[K1-4]T1-T4 LEVEL[HOME]MIXER"
+#define H_LEVELS "[K1-4]BANK LEVELS[HOME]MIXER"   /* (NightShift: T1..T4 or T5..T8, the selected track's) */
 #define H_GRID "[KEYS]STEPS[K2]LANE[EDIT]CLEAR"
 /* a layer's (LAYER_*): what its footer row (LAYERS[].foot) does not say */
 static const char *const HELP_LAYER[LAYER_N] = {

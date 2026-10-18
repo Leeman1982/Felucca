@@ -50,7 +50,7 @@ int main(int argc, char **argv)
         for (j = 0; j < NTRK; j++) {                                 /* SAMPLE, GRAIN, SLICE on the slot */
             uint32_t e = (j % 3u == 0) ? 4u : (j % 3u == 1) ? 8u : 13u;
             set_engine_of(&trk[j], e);
-            trk[j].p[P_E0] = (int16_t)(SMP_NSETS + k);
+            trk[j].p[P_E0] = (int16_t)(SMP_NBASE + k);
             trk[j].p[P_E1] = (int16_t)(rnd() % 128u); trk[j].p[P_E2] = (int16_t)(rnd() % 128u);
             trk_note_on(&trk[j], 24u + rnd() % 84u, 100);
         }

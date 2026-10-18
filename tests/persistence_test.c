@@ -422,6 +422,75 @@ static int autosave_test(void)
     return bad;
 }
 
+/* ---- NightShift: tracks 5..8 (project.c NSH1, storage.c 0xD2000..) with their FUN10 record: saved, loaded, a power
+ * cut at any write, a damaged record; the autosave's (0xDA000) ---- */
+static uint8_t ns_snap[0x100000];
+static void ns_set(uint32_t lo, uint32_t hi)             /* track 2's and track 6's first step: a note each (0: none) */
+{
+    step_t *a = &trk[1].step[0], *b = &trk[5].step[0];
+    memset(a, 0, sizeof *a); memset(b, 0, sizeof *b);
+    a->time = b->time = lo ? ST_NOTE : ST_REST;
+    a->n = lo ? 1u : 0u; a->note[0] = (uint8_t)lo; a->vel = 100;
+    b->time = hi ? ST_NOTE : ST_REST;
+    b->n = hi ? 1u : 0u; b->note[0] = (uint8_t)hi; b->vel = 100;
+}
+static uint32_t ns_got(void) { return (uint32_t)trk[1].step[0].note[0] << 8 | trk[5].step[0].note[0]; }
+static void ns_reload(void)                              /* power-on: the RAM cache lost, the slot loaded from flash */
+{
+    ns_set(0, 0);
+    memset(proj_slot, 0, sizeof proj_slot);
+    project_load(0);
+}
+static int nightshift_test(void)
+{
+    int bad = 0, ok, rc;
+    uint32_t n, olds = 0, news = 0, torn = 0, k;
+    step_t st5[NSTEP];
+    reset();
+    settings_init();
+    ns_set(40, 60);
+    rc = project_save(0);
+    ok = !rc && (((const uint32_t *)(nor + 0xD2000u + 256u))[0] == 0x3148534Eu ||
+                 ((const uint32_t *)(nor + 0xD3000u + 256u))[0] == 0x3148534Eu);
+    ns_reload();
+    bad += check("NightShift: a project saves tracks 5..8 (NSH1 at 0xD2000) and loads them back", ok && ns_got() == (40u << 8 | 60u));
+    memcpy(ns_snap, nor, sizeof nor);
+    for (n = 0; n < 200u; n++) {                         /* the save of (41, 61) cut after n programs */
+        memcpy(nor, ns_snap, sizeof nor);
+        ns_set(41, 61);
+        fail_after = (int)n;
+        rc = project_save(0);
+        fail_after = -1;
+        ns_reload();
+        k = ns_got();
+        olds += k == (40u << 8 | 60u);
+        news += k == (41u << 8 | 61u);
+        torn += k != (40u << 8 | 60u) && k != (41u << 8 | 61u);
+        if (!rc) break;
+    }
+    bad += check("NightShift: a power cut at any write of a save leaves the old pair or the new, never a mix",
+                 !torn && olds >= 2u && news == 1u && n < 200u);
+    ns_set(42, 62);
+    project_save(0);
+    nor[0xD2000u + 300u] ^= 0x10u; nor[0xD3000u + 300u] ^= 0x10u;   /* both NSH1 copies damaged (their CRC fails) */
+    ns_reload();
+    bad += check("NightShift: a damaged NSH1 record: tracks 1..4 load, 5..8 at their power-on sound, empty",
+                 ns_got() == (42u << 8 | 0u) && trk[5].eng_req == TRK_DEF[5][0] && !trk[5].step[0].n);
+    reset();
+    as_power_on();
+    as_edit(5);                                          /* (track 6) */
+    as_edit(13);
+    as_run(11000u);
+    memcpy(st5, trk[5].step, sizeof st5);
+    ok = as.writes == 1u && (((const uint32_t *)(nor + 0xDA000u + 256u))[0] == 0x3148534Eu ||
+                             ((const uint32_t *)(nor + 0xDB000u + 256u))[0] == 0x3148534Eu);
+    as_power_on();
+    ok &= memcmp(st5, trk[5].step, sizeof st5) != 0;
+    bad += check("NightShift: the autosave keeps tracks 5..8 (0xDA000) and power-on restores them",
+                 ok && autosave_boot(1) == 1 && !memcmp(st5, trk[5].step, sizeof st5));
+    return bad;
+}
+
 int main(void)
 {
     int bad = 0, ok;
@@ -613,7 +682,7 @@ int main(void)
         v5.size = sizeof v5;
         for (i = 0; i < G_COUNT; i++)
             v5.g[i] = GP[i].def;
-        for (i = 0; i < NTRK; i++) {
+        for (i = 0; i < NTRK_V4; i++) {
             v5.t[i].engine = trk[i].engine;
             memcpy(v5.t[i].p, trk[i].p, sizeof v5.t[i].p);
         }
@@ -699,6 +768,7 @@ int main(void)
                   irq_races == 3u && song.playing && !transport_req && persist_pending && erases == before);
     bad += mig_test();
     bad += autosave_test();
+    bad += nightshift_test();
     printf("%s\n", bad ? "PERSISTENCE TEST FAILED" : "persistence test passed");
     return bad != 0;
 }

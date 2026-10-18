@@ -1,0 +1,21 @@
+NightShift: the Open Samples sounds of the SAMPLE sets 101 BASS, 4P BASS, JUNO STR and the DRUM kit LINN
+
+Source:  Open Samples, https://github.com/pumodi/open-samples
+         Jeffrey "Pumodi" Brice (project admin), Jackson Harris and contributors; the JV-2080 recordings by the PCC
+         Cascade recording engineers (Jordan Laurent, Jay "Dalton" Battin, Joel Bocek, Lisa Bennett, Alessandra
+         Genovese, Michael Romay). See the library's docs/Attribution.md.
+Licence: Open Samples Permissive Use Public License (version 2, December 2025). NOT CC0, NOT GPL.
+         - free to use, commercial or not, for music production, performance and other sound playback;
+         - not to be repackaged for sale on their own, in sampler instruments, sample packs or any other
+           sample-based retail purpose (clause 2); the library may be redistributed as is non-commercially (2a);
+         - not to be used to train AI / generative AI / LLM models (the library's AI statement).
+
+What is used (excerpts made by tools/fetch_open_samples.py, then IMA ADPCM by tools/gen_samples.py):
+  Synthesizers/RolandSynthesizers/Roland JV-2080/Samples/101_Bass.wav      C2 C3 C4 -> SAMPLE set 101 BASS
+  Synthesizers/RolandSynthesizers/Roland JV-2080/Samples/4pole_Bass.wav    C1 C2 C3 -> SAMPLE set 4P BASS
+  Synthesizers/RolandSynthesizers/Roland JV-2080/Samples/JUNO_Strings.wav  C2 C3 C4 -> SAMPLE set JUNO STR
+  Synthesizers/Linn/LinnDrum/LinnDrum.nbkt   eight of its seventeen hits -> DRUM kit LINN (and SAMPLE set LINN)
+
+The excerpts are not kept in this repository: this folder holds only this file. Run tools/fetch_open_samples.py
+(it reads ../open-samples or OPEN_SAMPLES=path, else downloads the four files) before ./build.sh. A firmware image
+built with them carries these sounds: give it away freely, but do not sell it as, or as part of, a sample product.

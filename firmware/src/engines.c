@@ -11,15 +11,25 @@
  * the state each had at power-on, so a switch sounds as it did with the arrays (tests/union_test.c). State
  * that runs on across notes and switches stays outside (WHEEL's wheels, GRAIN's random numbers).
  * Sized by the largest, PHYS (3 x SYMP's slot); an engine that needs more than ENG_MEM_PART grows it for
- * every part (x NPART of the pool). Zero-initialised pool section: main.c fm1_cstart clears it. */
+ * every part (x NPART_BIG of the pool). Zero-initialised pool section: main.c fm1_cstart clears it.
+ * NightShift: parts 1..4 have such a region, parts 5..8 one of ENG_MEM_SMALL bytes (DRUM, FM6, SLICE fit it; PHYS and
+ * GRAIN do not: eng_fits, they play on tracks 1..4). Eight regions of PHYS's size would not fit the SRAM. */
 #define ENG_MEM_PART 12888u
+#define ENG_MEM_SMALL 2048u
 static union {
     uint64_t align;
     uint8_t b[ENG_MEM_PART];
-} eng_mem[NPART] __attribute__((section(".pool")));
+} eng_mem[NPART_BIG] __attribute__((section(".pool")));
+static union {
+    uint64_t align;
+    uint8_t b[ENG_MEM_SMALL];
+} eng_mem_small[NPART - NPART_BIG] __attribute__((section(".pool")));
 static uint8_t eng_mem_owner[NPART];       /* engine index + 1 whose state is in the region, 0 = none (zeros) */
-#define ENG_MEM(p) ((void *)eng_mem[p].b)  /* part p's region (p < NPART) */
+#define ENG_MEM(p) ((p) < NPART_BIG ? (void *)eng_mem[p].b : (void *)eng_mem_small[(p) - NPART_BIG].b)   /* part p's
+                                            * region (p < NPART) */
 #define ENG_MEM_FITS(name, size) _Static_assert((size) <= ENG_MEM_PART, name " state over ENG_MEM_PART")
+/* .. an engine every track can play (eng_fits) */
+#define ENG_MEM_ALL(name, size) _Static_assert((size) <= ENG_MEM_SMALL, name " state over ENG_MEM_SMALL (tracks 5..8)")
 
 #include "eng_analog.c"
 #include "eng_phase.c"
@@ -67,6 +77,8 @@ static const engine_t *const ENGINES[NENGINES] = {
 
 /* a track's engine number as an index (the audio paths: a compare, cheaper than % NENGINES; a bad number: 0) */
 static inline uint32_t eng_idx(uint32_t e) { return e < NENGINES ? e : 0u; }
+/* NightShift: engine e fits part p's engine memory (PHYS and GRAIN: tracks 1..4) */
+static inline int eng_fits(uint32_t e, uint32_t p) { return p < NPART_BIG || ENGINES[eng_idx(e)]->mem <= ENG_MEM_SMALL; }
 
 /* part t's engine memory goes to its engine (t->engine; voice.c engine_block, once a block: on a switch, after
  * the old engine's fade, before any note on the new one): zeroed (its engine_t.mem bytes) when another
@@ -79,7 +91,7 @@ static void eng_mem_claim(const track_t *t)
         return;
     e = eng_idx(t->engine);
     n = ENGINES[e]->mem;
-    if (!n || eng_mem_owner[p] == e + 1u)
+    if (!n || eng_mem_owner[p] == e + 1u || !eng_fits(e, p))
         return;
     w = (uint32_t *)ENG_MEM(p);
     for (k = 0; k < (n + 3u) / 4u; k++)
@@ -142,6 +154,15 @@ static uint32_t eng_step(uint32_t e, int32_t dir)
 {
     return eng_vis((eng_rank(e % NENGINES) + (dir > 0 ? 1u : NENG_SHOWN - 1u)) % NENG_SHOWN);
 }
+/* .. among the engines part p can play (eng_fits: tracks 5..8 step over PHYS and GRAIN) */
+static uint32_t eng_step_for(uint32_t e, int32_t dir, uint32_t p)
+{
+    uint32_t n;
+    for (n = 0; n < NENG_SHOWN; n++)
+        if (eng_fits(e = eng_step(e, dir), p))
+            break;
+    return e;
+}
 
 /* factory sequence patterns: SAVE > PHRASES loads one into the selected track (ui.c pat_load); a preset
  * only suggests one with PAT(n), loading a sound never touches the steps. Absolute notes, loaded as they
@@ -187,6 +208,8 @@ static const struct {
 #define NPATTERNS (sizeof PATTERNS / sizeof PATTERNS[0])
 
 /* the parts at power-on (engine, preset, PATTERNS[n - 1] in the sequencer, 0 = empty: all are): bass, pad, lead, drums */
-static const uint8_t TRK_DEF[NPART][3] = {{0, 4, 0}, {ENGI_FM6, 4, 0}, {3, 0, 0}, {ENGI_DRUM, 0, 0}}; /* ANALOG ACID,
+static const uint8_t TRK_DEF[NPART][3] = {{0, 4, 0}, {ENGI_FM6, 4, 0}, {3, 0, 0}, {ENGI_DRUM, 0, 0},   /* ANALOG ACID,
                                                                        * FM6 PAD (was DIGITAL PAD), LOFI PULSE LD, DRUM KIT */
+    {ENGI_SAMPLE, SMP_PRE_BASS, 0}, {ENGI_SAMPLE, SMP_PRE_STR, 0}, {ENGI_DRUM, DRUM_PRE_LINN, 0}, {0, 0, 0}};
+                                            /* NightShift's tracks 5..8: SAMPLE 101 BASS, JUNO STRINGS, DRUM LINN, ANALOG */
 static uint32_t trk_def_engine(uint32_t i) { return TRK_DEF[i % NPART][0]; }

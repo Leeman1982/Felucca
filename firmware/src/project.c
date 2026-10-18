@@ -119,7 +119,7 @@ typedef struct {
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel;                               /* the selected track */
-    uint8_t parts;                             /* NPART; 0: track 4 is the old GM drum part (see the top) */
+    uint8_t parts;                             /* PROJ_PARTS; 0: track 4 is the old GM drum part (see the top) */
     uint8_t phys;                              /* PROJ_PHYS: PHYS MODEL values as today; 1: MODEL 4 was DRUM;
                                                 * 0 (a reserved byte before 1.0): MODEL 2 was DUST */
     uint8_t rsv;
@@ -128,8 +128,11 @@ typedef struct {
     motion_store_t motion;
     uint8_t fm6[NTRK][FM6_PACKED];             /* each track's FM6 patch, packed (eng_fm6.c) */
     char name[PROJ_NAME_LEN];                  /* the project's name: upper-case ASCII 32..126, 0-padded; "" = none */
+    uint32_t hi;                               /* NightShift: the sum of the NSH1 record that holds tracks 5..8, as the
+                                                * FUN10 record names it (PROJ_PAIR_OFF); 0 = none (tracks 5..8 empty) */
     uint32_t sum;
 } project_t;
+#define PROJ_PARTS 4u                          /* project_t.parts since 1.0 (the stored byte: Felucca reads it) */
 /* Historical FUN5/6 types are frozen, independent of today's P_COUNT/step_t. */
 typedef struct { uint8_t note[4], n, time, flags, vel, hit, acc; } step10_t;
 typedef struct { int16_t p[69]; uint8_t engine, preset; step10_t step[NSTEP]; uint8_t lane[NLANE][5]; } proj_trk_v5_t;
@@ -137,11 +140,11 @@ typedef struct {                               /* format 5, before the song chai
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel, parts, phys, rsv;
-    proj_trk_v5_t t[NTRK];
+    proj_trk_v5_t t[NTRK_V4];
     uint32_t sum;
 } project_v5_t;
 typedef struct { uint32_t magic, size; int16_t g[G_COUNT]; uint8_t sel, parts, phys, rsv;
-    proj_trk_v5_t t[NTRK]; chain_v9_t chain; uint32_t sum; } project_v6_t;
+    proj_trk_v5_t t[NTRK_V4]; chain_v9_t chain; uint32_t sum; } project_v6_t;
 _Static_assert(sizeof(project_v5_t) == 3352u && sizeof(project_v6_t) == 3388u, "frozen formats 5 / 6 sizes");
 /* Serialized FUN7 keeps the retained cache's exact extent. Params are biased
  * bytes, steps pack n/time/flags. Reserved tail is zero and covered by hash.
@@ -156,7 +159,9 @@ _Static_assert(sizeof(project_v5_t) == 3352u && sizeof(project_v6_t) == 3388u, "
 #define PROJ_STORE_V8 3584u                    /* FUN8 */
 #define PROJ_STORE_V7 3388u                    /* FUN7 */
 #define PROJ_NAME_OFF (PROJ_STORE_SIZE - 4u - PROJ_NAME_LEN)
-#define PROJ_FM6_OFF (PROJ_NAME_OFF - NTRK * FM6_PACKED)
+#define PROJ_FM6_OFF (PROJ_NAME_OFF - NTRK_V4 * FM6_PACKED)
+#define PROJ_PAIR_OFF (PROJ_FM6_OFF - 4u)       /* NightShift: the NSH1 record's sum (project_t.hi), in FUN10's spare
+                                                * bytes (Felucca writes 0 there and never reads it) */
 typedef union { uint32_t align; uint8_t raw[PROJ_STORE_SIZE]; } project_store_t;
 _Static_assert(G_COUNT == 27u, "FUN7 globals retain original IDs");
 _Static_assert(sizeof(project_store_t) == 3840u && PROJ_STORE_V7 == sizeof(project_v6_t), "FUN10 / FUN7 sizes");
@@ -169,7 +174,7 @@ typedef struct {                               /* format 4 (1.0 development buil
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel, parts, phys, rsv;
-    proj_trk_v4_t t[NTRK];
+    proj_trk_v4_t t[NTRK_V4];
     uint32_t sum;
 } project_v4_t;
 typedef struct {                               /* a track of format 3, read only */
@@ -181,7 +186,7 @@ typedef struct {                               /* format 3 (0.9 .. 1.0), read on
     uint32_t magic, size;
     int16_t g[G_COUNT];
     uint8_t sel, parts, rsv[2];
-    proj_trk_v3_t t[NTRK];
+    proj_trk_v3_t t[NTRK_V4];
     uint32_t sum;
 } project_v3_t;
 #define PROJ_DEF_SOUND 0xFFu                   /* preset byte: the track's power-on sound, no steps (format 1) */
@@ -195,7 +200,7 @@ typedef struct {                               /* format 2 (until 0.9), read onl
     uint32_t magic, size;
     int16_t g[PROJ_NG_V2];
     uint8_t sel, rsv[3];
-    proj_trk_v2_t t[NTRK];
+    proj_trk_v2_t t[NTRK_V4];
     uint32_t sum;
 } project_v2_t;
 typedef struct {                               /* format 1 (until 0.5 beta), read only */
@@ -275,14 +280,14 @@ static void proj_trk_from_v2(proj_trk_t *d, const proj_trk_v2_t *s)
  * project_load gives it DRUM's kit (PROJ_DEF_KEEP; the SAMPLE PERC sound until 1.0.2). Idempotent */
 static void proj_drums_to_part(project_t *q)
 {
-    proj_trk_t *d = &q->t[NTRK - 1u];
-    if (q->parts == NPART)
+    proj_trk_t *d = &q->t[NTRK_V4 - 1u];
+    if (q->parts == PROJ_PARTS)
         return;
     d->engine = ENGI_DRUM;                      /* DRUM's first kit: independent of today's power-on drum sound */
     d->preset = PROJ_DEF_KEEP;
     d->p[P_LEVEL] = (int16_t)clamp(q->g[G_DRLVL], 0, 127);   /* the drum part's level and reverb send */
     d->p[P_REV] = (int16_t)clamp(q->g[G_DRREV], 0, 127);
-    q->parts = NPART;
+    q->parts = PROJ_PARTS;
     q->sum = proj_sum(q);
 }
 
@@ -392,7 +397,7 @@ static int proj_from_v4(project_t *q, const project_v4_t *v4, int n)
     q->sel = v4->sel;
     q->parts = v4->parts;
     q->phys = v4->phys;
-    for (i = 0; i < NTRK; i++)
+    for (i = 0; i < NTRK_V4; i++)
         proj_trk_from(&q->t[i], v4->t[i].p, PROJ_NP_V4, v4->t[i].engine, v4->t[i].preset, v4->t[i].step);
     q->sum = proj_sum(q);
     proj_drums_to_part(q);
@@ -413,7 +418,7 @@ static int proj_from_v3(project_t *q, const project_v3_t *v3, int n)
     proj_rtype_room(q->g);
     q->sel = v3->sel;
     q->parts = v3->parts;
-    for (i = 0; i < NTRK; i++)
+    for (i = 0; i < NTRK_V4; i++)
         proj_trk_from(&q->t[i], v3->t[i].p, PROJ_NP_V3, v3->t[i].engine, v3->t[i].preset, v3->t[i].step);
     q->sum = proj_sum(q);
     proj_drums_to_part(q);                     /* (a format 3 of firmware before 1.0: parts 0) */
@@ -432,7 +437,7 @@ static int proj_from_v2(project_t *q, const project_v2_t *v2, int n)
     q->size = sizeof *q;
     proj_g_from_v2(q->g, v2->g);
     q->sel = v2->sel;
-    for (i = 0; i < NTRK; i++)
+    for (i = 0; i < NTRK_V4; i++)
         proj_trk_from_v2(&q->t[i], &v2->t[i]);
     proj_drums_to_part(q);                     /* (format 2 had the drum track: parts 0) */
     return 1;
@@ -450,7 +455,7 @@ static int proj_from_v1(project_t *q, const project_v1_t *v1, int n)
     q->magic = PROJ_MAGIC;
     q->size = sizeof *q;
     proj_g_from_v2(q->g, v1->g);
-    q->parts = NPART;                          /* (format 1 had no track 4) */
+    q->parts = PROJ_PARTS;                     /* (format 1 had no track 4) */
     proj_trk_from_v2(&q->t[0], &v1->t);
     for (i = 1; i < NTRK; i++) {               /* the other tracks: their defaults, no steps */
         uint32_t k;
@@ -477,6 +482,35 @@ static void proj_fm6_init(project_t *q)
 }
 static int proj_import_old(project_t *q, const void *b, int n);
 static int proj_import_any(project_t *q, const void *b, int n);
+/* NightShift: tracks 5..8 of a project as a record of four tracks (any format, FUN10 included) leaves them: their
+ * power-on sounds without steps (as format 1's tracks 2..4), the init FM6 patch, in each song section the slot of
+ * track 1, no motion. proj_hi_apply puts in the NSH1 record's when there is one. Idempotent */
+static void proj_hi_default(project_t *q)
+{
+    uint32_t t, k;
+    for (t = NTRK_V4; t < NTRK; t++) {
+        proj_trk_t *d = &q->t[t];
+        memset(d, 0, sizeof *d);
+        for (k = 0; k < P_COUNT; k++)
+            d->p[k] = param_desc_of(trk_def_engine(t), k)->def;
+        d->engine = (uint8_t)trk_def_engine(t);
+        d->preset = PROJ_DEF_SOUND;
+        for (k = 0; k < NSTEP; k++)
+            d->step[k].time = ST_REST;
+        memcpy(q->fm6[t], FM6_INIT, FM6_PACKED);
+    }
+    for (k = 0; k < CHAIN_ROWS; k++)
+        for (t = NTRK_V4; t < NTRK; t++)
+            q->chain.row[k].slot[t] = q->chain.row[k].slot[0];
+    for (t = k = 0; t < q->motion.count && t < MOTION_MAX; t++)
+        if ((q->motion.event[t].place >> 6) < NTRK_V4)
+            q->motion.event[k++] = q->motion.event[t];
+    for (t = k; t < MOTION_MAX; t++)
+        memset(&q->motion.event[t], 0, sizeof q->motion.event[t]);
+    q->motion.count = (uint8_t)k;
+    q->motion.on &= (uint8_t)((1u << NTRK_V4) - 1u);
+    q->sum = proj_sum(q);
+}
 /* every track's engine one this firmware has (DIGITAL, 1, is one: it converts): a project of another number
  * is not one (it never was: no engine number past the last was ever stored) */
 static int proj_engines_ok(const project_t *q)
@@ -491,7 +525,10 @@ static int proj_engines_ok(const project_t *q)
  * project */
 static int proj_import(project_t *q, const void *b, int n)
 {
-    if (!proj_import_any(q, b, n) || !proj_engines_ok(q))
+    if (!proj_import_any(q, b, n))
+        return 0;
+    proj_hi_default(q);                         /* tracks 5..8: a record holds 1..4 (proj_hi_apply puts 5..8 in) */
+    if (!proj_engines_ok(q))
         return 0;
     proj_fm4(q);
     proj_perc(q);
@@ -536,7 +573,7 @@ static int proj_import_old(project_t *q, const void *b, int n)
             memcpy(q->g, v->g, sizeof q->g);
             proj_rtype_room(q->g);
             q->sel = v->sel; q->parts = v->parts; q->phys = v->phys;
-            for (i = 0; i < NTRK; i++) {
+            for (i = 0; i < NTRK_V4; i++) {
                 int16_t def[P_COUNT];
                 if (v->t[i].engine >= NENGINES) return 0;
                 for (k = 0; k < P_COUNT; k++) def[k] = param_desc_of(v->t[i].engine, k)->def;
@@ -574,48 +611,230 @@ static uint32_t proj_name_get(char *d, const uint8_t *s)   /* its length */
     return i;
 }
 
+/* one track as FUN10 stores it (NSH1 too): P_COUNT biased parameter bytes, engine, preset, 64 nine-byte steps at
+ * b + *pos. 0 = a value it cannot hold */
+static int proj_trk_put(uint8_t *b, uint32_t *pos, const proj_trk_t *d)
+{
+    uint32_t i;
+    for (i = 0; i < P_COUNT; i++) {
+        if (d->p[i] < -64 || d->p[i] > 127) return 0;
+        b[(*pos)++] = (uint8_t)(d->p[i] + 64);
+    }
+    b[(*pos)++] = d->engine; b[(*pos)++] = d->preset;
+    for (i = 0; i < NSTEP; i++) {
+        const step_t *s = &d->step[i];
+        uint32_t r = step_ratchet(s) - 1u;              /* RATCH: bit 7 of the velocity and chance bytes (see the top) */
+        uint32_t nd = (uint32_t)step_nudge(s) & 15u;    /* NUDGE (FUN10): bit j in bit 7 of note j */
+        if (s->n > 4u || s->time > ST_REST || (s->flags & ~(3u | SF_RATCH | SF_NUDGE)) || s->probability > 101u)
+            return 0;
+        for (uint32_t j = 0; j < 4u; j++)               /* what proj_trk_get checks, so a saved project always loads: */
+            b[(*pos)++] = (uint8_t)((s->note[j] > 127u ? 127u : s->note[j]) | (nd >> j & 1u) << 7);   /* notes and
+                                                         * velocity 0..127, accents */
+        b[(*pos)++] = (uint8_t)(s->n | s->time << 3 | (s->flags & 3u) << 5);   /* only on hits */
+        b[(*pos)++] = (uint8_t)((s->vel > 127u ? 127u : s->vel) | (r & 1u) << 7); b[(*pos)++] = s->hit;
+        b[(*pos)++] = s->acc & s->hit;
+        b[(*pos)++] = (uint8_t)(s->probability | (r >> 1) << 7);
+    }
+    return 1;
+}
+/* .. back (np stored parameters, mapped by count; v10: the nudges in the note bytes). 0 = not a valid track */
+static int proj_trk_get(const uint8_t *b, uint32_t *pos, proj_trk_t *d, uint32_t np, uint32_t v10)
+{
+    int16_t values[P_COUNT], def[P_COUNT];
+    uint32_t i;
+    for (i = 0; i < np; i++) { if (b[*pos] > 191u) return 0; values[i] = (int16_t)b[(*pos)++] - 64; }
+    d->engine = b[(*pos)++]; d->preset = b[(*pos)++];
+    if (d->engine >= NENGINES) return 0;
+    for (i = 0; i < P_COUNT; i++) def[i] = param_desc_of(d->engine, i)->def;
+    params_by_count(d->p, values, np, def);
+    for (i = 0; i < NSTEP; i++) {
+        step_t *s = &d->step[i]; uint32_t meta, nd = 0;
+        for (uint32_t j = 0; j < 4u; j++) {             /* (FUN10: bit 7 of note j is bit j of the nudge) */
+            if (b[*pos] > 127u && !v10) return 0;
+            nd |= (uint32_t)(b[*pos] >> 7) << j;
+            s->note[j] = b[(*pos)++] & 127u;
+        }
+        meta = b[(*pos)++];
+        s->n = meta & 7u; s->time = (meta >> 3) & 3u; s->flags = (meta >> 5) & 3u;
+        s->vel = b[*pos] & 127u; meta |= (b[(*pos)++] & 128u) << 1;      /* (RATCH bit 0 at bit 8 of meta) */
+        s->hit = b[(*pos)++]; s->acc = b[(*pos)++];
+        s->probability = b[*pos] & 127u; meta |= (b[(*pos)++] & 128u) << 2;   /* (bit 1 at bit 9) */
+        if ((meta & 255u) > 127u || s->n > 4u || s->time > ST_REST || s->probability > 101u) return 0;
+        if (s->acc & ~s->hit) return 0;
+        step_set_ratchet(s, (meta >> 8) + 1u);
+        step_set_nudge(s, (int32_t)(nd ^ 8u) - 8);
+    }
+    return 1;
+}
+/* the motion records of tracks t0 .. t0 + 3 as FUN10's block (MOTION_DISK bytes at b: count, on, 2 reserved, then
+ * place - t0 * 64, id, value a record) */
+static void proj_motion_put(uint8_t *b, const motion_store_t *m, uint32_t t0)
+{
+    uint32_t i, n = 0;
+    memset(b, 0, MOTION_DISK);
+    b[1] = (uint8_t)((m->on >> t0) & ((1u << NTRK_V4) - 1u));
+    for (i = 0; i < m->count && i < MOTION_MAX; i++) {
+        const motion_event_t *e = &m->event[i];
+        uint32_t k = e->place >> 6;
+        if (k < t0 || k >= t0 + NTRK_V4)
+            continue;
+        b[4u + 3u * n] = (uint8_t)(e->place - (t0 << 6));
+        b[5u + 3u * n] = e->param;
+        b[6u + 3u * n] = (uint8_t)e->value;
+        n++;
+    }
+    b[0] = (uint8_t)n;
+}
+/* .. added to m (records of tracks t0 ..): 0 = not a valid block, or more records than m has room for */
+static int proj_motion_get(motion_store_t *m, const uint8_t *b, uint32_t t0)
+{
+    uint32_t i;
+    if (b[0] > MOTION_MAX || m->count + b[0] > MOTION_MAX || (b[1] & ~((1u << NTRK_V4) - 1u)))
+        return 0;
+    for (i = 0; i < b[0]; i++) {
+        motion_event_t *e = &m->event[m->count++];   /* (a byte: tracks t0 .. t0 + 3) */
+        e->place = (uint16_t)(b[4u + 3u * i] + (t0 << 6));
+        e->param = b[5u + 3u * i];
+        e->value = (int8_t)b[6u + 3u * i];
+    }
+    m->on |= (uint8_t)(b[1] << t0);
+    return 1;
+}
+
 /* A stable serialized schema: first header retains FUN6's fields; at byte66
- * np, format flags, then four byte-param tracks and nine-byte steps; FUN8: the patches at PROJ_FM6_OFF. */
+ * np, format flags, then four byte-param tracks and nine-byte steps; FUN8: the patches at PROJ_FM6_OFF.
+ * NightShift writes tracks 1..4 here exactly as Felucca 1.5 does, and the sum of the NSH1 record of tracks 5..8 at
+ * PROJ_PAIR_OFF (q->hi) */
 static int proj_pack(project_store_t *out, const project_t *q)
 {
-    uint8_t *b = out->raw; uint32_t pos = 68u, t, i; uint32_t magic = PROJ_MAGIC, size = PROJ_STORE_SIZE, sum;
+    uint8_t *b = out->raw; uint32_t pos = 68u, t, i, k; uint32_t magic = PROJ_MAGIC, size = PROJ_STORE_SIZE, sum;
+    chain_v10_t c;
     for (t = 0; t < NTRK; t++)
         for (i = 0; i < FM6_PACKED; i++)
             if (q->fm6[t][i] > 127u) return 0;
     if (!chain_valid(&q->chain) || !motion_valid(&q->motion) || P_COUNT > 127u) return 0;
     memset(out, 0, sizeof *out); memcpy(b, &magic, 4); memcpy(b + 4, &size, 4);
     memcpy(b + 8, q->g, sizeof q->g); b[62] = q->sel; b[63] = q->parts; b[64] = q->phys; b[66] = P_COUNT;
-    for (t = 0; t < NTRK; t++) {
-        for (i = 0; i < P_COUNT; i++) {
-            if (q->t[t].p[i] < -64 || q->t[t].p[i] > 127) return 0;
-            b[pos++] = (uint8_t)(q->t[t].p[i] + 64);
-        }
-        b[pos++] = q->t[t].engine; b[pos++] = q->t[t].preset;
-        for (i = 0; i < NSTEP; i++) {
-            const step_t *s = &q->t[t].step[i];
-            uint32_t r = step_ratchet(s) - 1u;          /* RATCH: bit 7 of the velocity and chance bytes (see the top) */
-            uint32_t nd = (uint32_t)step_nudge(s) & 15u;   /* NUDGE (FUN10): bit j in bit 7 of note j */
-            if (s->n > 4u || s->time > ST_REST || (s->flags & ~(3u | SF_RATCH | SF_NUDGE)) || s->probability > 101u)
-                return 0;
-            for (uint32_t j = 0; j < 4u; j++)           /* what proj_unpack checks, so a saved project always loads: */
-                b[pos++] = (uint8_t)((s->note[j] > 127u ? 127u : s->note[j]) | (nd >> j & 1u) << 7);   /* notes and
-                                                         * velocity 0..127, accents */
-            b[pos++] = (uint8_t)(s->n | s->time << 3 | (s->flags & 3u) << 5);   /* only on hits */
-            b[pos++] = (uint8_t)((s->vel > 127u ? 127u : s->vel) | (r & 1u) << 7); b[pos++] = s->hit;
-            b[pos++] = s->acc & s->hit;
-            b[pos++] = (uint8_t)(s->probability | (r >> 1) << 7);
-        }
+    for (t = 0; t < NTRK_V4; t++)
+        if (!proj_trk_put(b, &pos, &q->t[t])) return 0;
+    if (pos + sizeof c + MOTION_DISK > PROJ_PAIR_OFF) return 0;
+    memset(&c, 0, sizeof c);
+    c.count = q->chain.count;
+    for (i = 0; i < CHAIN_ROWS; i++) {
+        for (k = 0; k < NTRK_V4; k++)
+            c.row[i].slot[k] = q->chain.row[i].slot[k];
+        c.row[i].repeat = q->chain.row[i].repeat;
     }
-    if (pos + sizeof q->chain + sizeof q->motion > PROJ_FM6_OFF) return 0;
-    memcpy(b + pos, &q->chain, sizeof q->chain); pos += sizeof q->chain;
-    memcpy(b + pos, &q->motion, sizeof q->motion);
-    memcpy(b + PROJ_FM6_OFF, q->fm6, sizeof q->fm6);
+    memcpy(b + pos, &c, sizeof c); pos += sizeof c;
+    proj_motion_put(b + pos, &q->motion, 0);
+    memcpy(b + PROJ_PAIR_OFF, &q->hi, 4);
+    for (t = 0; t < NTRK_V4; t++)
+        memcpy(b + PROJ_FM6_OFF + t * FM6_PACKED, q->fm6[t], FM6_PACKED);
     {   /* the name (0-padded; stops at the first 0) */
         char n[PROJ_NAME_LEN + 1u];
         memcpy(b + PROJ_NAME_OFF, n, proj_name_get(n, (const uint8_t *)q->name));
     }
     sum = proj_hash(b, PROJ_STORE_SIZE - 4u); memcpy(b + PROJ_STORE_SIZE - 4u, &sum, 4);
     return 1;
+}
+
+/* NightShift's second record of a project ("NSH1", a storage object of its own, project_store_t's size): tracks 5..8.
+ *   0 magic, 4 size, 8 P_COUNT (np), 9..15 reserved (0)
+ *   16 the song sections' slots of tracks 5..8 (CHAIN_ROWS x 4)
+ *   80 their motion records (MOTION_DISK, places as track - 4: proj_motion_put)
+ *   468 the four tracks (proj_trk_put: np + 2 + 576 bytes each)
+ *   PROJ_HI_FM6 their FM6 patches, then the sum (FNV-1a of every byte before it)
+ * The FUN10 record of the same save names this sum (project_t.hi), so the pair is found again whatever copy (A or B)
+ * of each a power cut left in charge: tracks 5..8 are written first, then tracks 1..4 (proj_save_pair) */
+#define PROJ_HI_MAGIC 0x3148534Eu              /* "NSH1" */
+#define PROJ_HI_CHAIN 16u
+#define PROJ_HI_MOTION (PROJ_HI_CHAIN + CHAIN_ROWS * NTRK_V4)
+#define PROJ_HI_TRK (PROJ_HI_MOTION + MOTION_DISK)
+#define PROJ_HI_FM6 (PROJ_STORE_SIZE - 4u - NTRK_V4 * FM6_PACKED)
+_Static_assert(PROJ_HI_TRK + NTRK_V4 * (P_COUNT + 2u + NSTEP * 9u) <= PROJ_HI_FM6, "NSH1: tracks 5..8 do not fit");
+static uint32_t proj_pack_hi(project_store_t *out, const project_t *q)   /* its sum, 0 = a value it cannot hold */
+{
+    uint8_t *b = out->raw;
+    uint32_t pos = PROJ_HI_TRK, t, i, magic = PROJ_HI_MAGIC, size = PROJ_STORE_SIZE, sum;
+    memset(out, 0, sizeof *out);
+    memcpy(b, &magic, 4); memcpy(b + 4, &size, 4); b[8] = P_COUNT;
+    for (i = 0; i < CHAIN_ROWS; i++)
+        for (t = 0; t < NTRK_V4; t++)
+            b[PROJ_HI_CHAIN + i * NTRK_V4 + t] = q->chain.row[i].slot[NTRK_V4 + t];
+    proj_motion_put(b + PROJ_HI_MOTION, &q->motion, NTRK_V4);
+    for (t = NTRK_V4; t < NTRK; t++)
+        if (!proj_trk_put(b, &pos, &q->t[t])) return 0;
+    for (t = 0; t < NTRK_V4; t++)
+        for (i = 0; i < FM6_PACKED; i++) {
+            if (q->fm6[NTRK_V4 + t][i] > 127u) return 0;
+            b[PROJ_HI_FM6 + t * FM6_PACKED + i] = q->fm6[NTRK_V4 + t][i];
+        }
+    sum = proj_hash(b, PROJ_STORE_SIZE - 4u);
+    if (!sum) sum = 1u;                                 /* (0 names none) */
+    memcpy(b + PROJ_STORE_SIZE - 4u, &sum, 4);
+    return sum;
+}
+/* the NSH1 record b (n bytes) -> tracks 5..8 of q, if it is the one q's FUN10 record names (q->hi); 0 = not (q as it
+ * was: tracks 5..8 as proj_hi_default left them) */
+static int proj_motion_ids(motion_store_t *m, uint32_t np);
+static int proj_hi_apply(project_t *q, const uint8_t *b, int n)
+{
+    motion_store_t m;
+    uint32_t pos = PROJ_HI_TRK, t, i, magic, size, sum, np;
+    if (n != (int)PROJ_STORE_SIZE || !q->hi)
+        return 0;
+    memcpy(&magic, b, 4); memcpy(&size, b + 4, 4); memcpy(&sum, b + PROJ_STORE_SIZE - 4u, 4); np = b[8];
+    if (magic != PROJ_HI_MAGIC || size != PROJ_STORE_SIZE || sum != q->hi ||
+        (sum != proj_hash(b, PROJ_STORE_SIZE - 4u) && !(sum == 1u && !proj_hash(b, PROJ_STORE_SIZE - 4u))) ||
+        np < 8u || np > P_COUNT || PROJ_HI_TRK + NTRK_V4 * (np + 2u + NSTEP * 9u) > PROJ_HI_FM6)
+        return 0;
+    for (i = 0; i < CHAIN_ROWS * NTRK_V4; i++)
+        if (b[PROJ_HI_CHAIN + i] > CHAIN_SILENT) return 0;
+    m = q->motion;
+    if (!proj_motion_get(&m, b + PROJ_HI_MOTION, NTRK_V4) || !proj_motion_ids(&m, np) || !motion_valid(&m))
+        return 0;
+    for (t = 0; t < NTRK_V4; t++)                       /* (into q: a bad track puts the defaults back) */
+        if (!proj_trk_get(b, &pos, &q->t[NTRK_V4 + t], np, 1)) {
+            proj_hi_default(q);
+            return 0;
+        }
+    for (t = 0; t < NTRK_V4; t++) {
+        for (i = 0; i < FM6_PACKED; i++)
+            q->fm6[NTRK_V4 + t][i] = b[PROJ_HI_FM6 + t * FM6_PACKED + i] & 0x7Fu;
+    }
+    for (i = 0; i < CHAIN_ROWS; i++)
+        for (t = 0; t < NTRK_V4; t++)
+            q->chain.row[i].slot[NTRK_V4 + t] = b[PROJ_HI_CHAIN + i * NTRK_V4 + t];
+    q->motion = m;
+    q->sum = proj_sum(q);
+    proj_fm4(q);                                        /* (no-ops for what NightShift writes; as the FUN10 half) */
+    proj_perc(q);
+    return 1;
+}
+/* NightShift: q as its two records (lo FUN10, hi NSH1; q->hi becomes hi's sum) and back: what a save and a load do,
+ * without the flash (tests/: round trips of all eight tracks). 0 = a value no record holds / not a project */
+static int proj_pack_pair(project_store_t *lo, project_store_t *hi, project_t *q)
+{
+    uint32_t sum = proj_pack_hi(hi, q);
+    if (!sum)
+        return 0;
+    q->hi = sum;
+    q->sum = proj_sum(q);
+    return proj_pack(lo, q);
+}
+static int proj_import_pair(project_t *q, const project_store_t *lo, const project_store_t *hi)
+{
+    if (!proj_import(q, lo, sizeof *lo))
+        return 0;
+    if (hi)
+        proj_hi_apply(q, hi->raw, sizeof *hi);
+    return 1;
+}
+/* .. q through both records into out (q->hi set as a save sets it) */
+static int proj_round_trip(project_t *q, project_t *out)
+{
+    static project_store_t lo, hi;
+    return proj_pack_pair(&lo, &hi, q) && proj_import_pair(out, &lo, &hi);
 }
 /* the motion of a FUN7 / FUN8 written with np parameters (np < P_COUNT: a FUN7 of 89 before the chord keys, every
  * FUN8 of 91 before the DRUM lane levels) -> today's ids: an event names a parameter id, and the ids from that
@@ -659,56 +878,42 @@ static int proj_motion_v9(motion_store_t *m, const uint8_t *b)
 static int proj_unpack(project_t *q, const uint8_t *b, uint32_t st)
 {
     uint32_t pos = 68u, t, i, magic, size, sum, np = b[66], v7 = st == PROJ_STORE_V7, v10 = st == PROJ_STORE_SIZE;
-    uint32_t name_off = st - 4u - PROJ_NAME_LEN, end = v7 ? name_off : name_off - NTRK * FM6_PACKED;
-    uint32_t mot = v10 ? sizeof q->motion : PROJ_MOTION_V9, chn = v10 ? sizeof q->chain : sizeof(chain_v9_t);
+    uint32_t name_off = st - 4u - PROJ_NAME_LEN, end = v7 ? name_off : name_off - NTRK_V4 * FM6_PACKED;
+    uint32_t mot = v10 ? MOTION_DISK : PROJ_MOTION_V9, chn = v10 ? sizeof(chain_v10_t) : sizeof(chain_v9_t);
     memcpy(&magic, b, 4); memcpy(&size, b + 4, 4); memcpy(&sum, b + st - 4u, 4);
     if (magic != (v7 ? PROJ_MAGIC_V7 : st == PROJ_STORE_V8 ? PROJ_MAGIC_V8 : st == PROJ_STORE_V9 ? PROJ_MAGIC_V9 : PROJ_MAGIC) ||
         size != st || sum != proj_hash(b, st - 4u) ||
-        np < 8u || np > P_COUNT || 68u + NTRK * (np + 2u + NSTEP * 9u) + chn + mot > end)
+        np < 8u || np > P_COUNT || 68u + NTRK_V4 * (np + 2u + NSTEP * 9u) + chn + mot > end)
         return 0;
     memset(q, 0, sizeof *q); q->magic = PROJ_MAGIC; q->size = sizeof *q;
     memcpy(q->g, b + 8, sizeof q->g); q->sel = b[62]; q->parts = b[63]; q->phys = b[64];
     if (v7 && (q->g[G_RTYPE] < 0 || q->g[G_RTYPE] > 1))   /* a FUN7 may still hold the old drum channel there */
         proj_rtype_room(q->g);
-    for (t = 0; t < NTRK; t++) {
-        int16_t values[P_COUNT], def[P_COUNT];
-        for (i = 0; i < np; i++) { if (b[pos] > 191u) return 0; values[i] = (int16_t)b[pos++] - 64; }
-        q->t[t].engine = b[pos++]; q->t[t].preset = b[pos++];
-        if (q->t[t].engine >= NENGINES) return 0;
-        for (i = 0; i < P_COUNT; i++) def[i] = param_desc_of(q->t[t].engine, i)->def;
-        params_by_count(q->t[t].p, values, np, def);
-        for (i = 0; i < NSTEP; i++) {
-            step_t *s = &q->t[t].step[i]; uint32_t meta, nd = 0;
-            for (uint32_t j = 0; j < 4u; j++) {         /* (FUN10: bit 7 of note j is bit j of the nudge) */
-                if (b[pos] > 127u && !v10) return 0;
-                nd |= (uint32_t)(b[pos] >> 7) << j;
-                s->note[j] = b[pos++] & 127u;
-            }
-            meta = b[pos++];
-            s->n = meta & 7u; s->time = (meta >> 3) & 3u; s->flags = (meta >> 5) & 3u;
-            s->vel = b[pos] & 127u; meta |= (b[pos++] & 128u) << 1;      /* (RATCH bit 0 at bit 8 of meta) */
-            s->hit = b[pos++]; s->acc = b[pos++];
-            s->probability = b[pos] & 127u; meta |= (b[pos++] & 128u) << 2;   /* (bit 1 at bit 9) */
-            if ((meta & 255u) > 127u || s->n > 4u || s->time > ST_REST || s->probability > 101u) return 0;
-            if (s->acc & ~s->hit) return 0;
-            step_set_ratchet(s, (meta >> 8) + 1u);
-            step_set_nudge(s, (int32_t)(nd ^ 8u) - 8);
+    for (t = 0; t < NTRK_V4; t++)
+        if (!proj_trk_get(b, &pos, &q->t[t], np, v10)) return 0;
+    if (v10) {                                          /* (FUN10: sections, a slot per track; before: rows) */
+        chain_v10_t c;
+        memcpy(&c, b + pos, sizeof c);
+        chain_defaults(&q->chain);
+        q->chain.count = c.count;
+        for (i = 0; i < CHAIN_ROWS; i++) {
+            for (t = 0; t < NTRK; t++)                  /* (tracks 5..8: track 1's, proj_hi_default) */
+                q->chain.row[i].slot[t] = c.row[i].slot[t < NTRK_V4 ? t : 0u];
+            q->chain.row[i].repeat = c.row[i].repeat;
         }
-    }
-    if (v10)                                            /* (FUN10: sections, a slot per track; before: rows) */
-        memcpy(&q->chain, b + pos, sizeof q->chain);
-    else {
+    } else {
         chain_v9_t c9;
         memcpy(&c9, b + pos, sizeof c9);
         if (!chain_from_v9(&q->chain, &c9)) return 0;
     }
     pos += chn;
-    if (v10)
-        memcpy(&q->motion, b + pos, sizeof q->motion);
-    else if (!proj_motion_v9(&q->motion, b + pos))
+    if (v10) {
+        if (!proj_motion_get(&q->motion, b + pos, 0)) return 0;
+        memcpy(&q->hi, b + PROJ_PAIR_OFF, 4);           /* (NightShift: the NSH1 record's sum; Felucca: 0) */
+    } else if (!proj_motion_v9(&q->motion, b + pos))
         return 0;
     if (!proj_motion_ids(&q->motion, np) || !chain_valid(&q->chain) || !motion_valid(&q->motion)) return 0;
-    for (t = 0; t < NTRK; t++) {
+    for (t = 0; t < NTRK_V4; t++) {
         if (v7)
             memcpy(q->fm6[t], FM6_INIT, FM6_PACKED);
         else
@@ -794,6 +999,47 @@ static void proj_bound(project_t *q)
 }
 
 #if FELUCCA_FLASH
+/* NightShift: tracks 5..8 of q from the NSH1 record its FUN10 record names (q->hi), in storage object obj
+ * (OBJ_PROJHI0 + slot, OBJ_AUTOHI); none found: they stay as proj_import left them (empty) */
+static void proj_hi_fetch(project_t *q, uint32_t obj)
+{
+    int n;
+    if (!flash_ok || !q->hi)
+        return;
+    proj_wire_gen++;
+    n = st_load_sum(obj, &proj_wire, sizeof proj_wire, q->hi);
+    if (n > 0)
+        proj_hi_apply(q, proj_wire.raw, n);
+}
+/* q into the storage objects lo (tracks 1..4, FUN10) and hi (5..8, NSH1): hi first, into the copy that does not hold
+ * the record lo's current copy names (so the pair in charge stays whole whenever the power goes), and only when it
+ * changed; then lo, naming it. proj_wire holds the FUN10 record after. 0 saved, else an st_save error (-100: a value
+ * no record holds) */
+static int proj_save_pair(project_t *q, uint32_t lo, uint32_t hi)
+{
+    st_hdr_t h;
+    uint32_t named = 0, sum, c;
+    int keep = -1, rc;
+    if (st_current(lo, &h) >= 0 && h.len == PROJ_STORE_SIZE && ((const uint32_t *)st_buf)[0] == PROJ_MAGIC)
+        memcpy(&named, st_buf + PROJ_PAIR_OFF, 4);
+    for (c = 0; named && c < 2u; c++) {                 /* the copy of hi that record names */
+        uint32_t v;
+        if (!st_head(hi, c, &h) && h.len == PROJ_STORE_SIZE &&
+            !st_read(st_sector(hi, c) + ST_PAYLOAD_OFF + PROJ_STORE_SIZE - 4u, &v, 4) && v == named)
+            keep = (int)c;
+    }
+    proj_wire_gen++;
+    if (!(sum = proj_pack_hi(&proj_wire, q)))
+        return -100;
+    if ((sum != named || keep < 0) && (rc = st_save_to(hi, &proj_wire, sizeof proj_wire, keep < 0 ? -1 : 1 - keep)) != 0)
+        return rc;
+    q->hi = sum;
+    q->sum = proj_sum(q);
+    if (!proj_pack(&proj_wire, q))
+        return -100;
+    return st_save(lo, &proj_wire, sizeof proj_wire);
+}
+
 /* slot from flash into RAM (format 7, or format 6 / 5 / 4 / 3 / 2 / 1 converted) */
 static void proj_fetch(uint32_t slot)
 {
@@ -821,7 +1067,7 @@ static void project_capture(project_t *p)
     for (i = 0; i < G_COUNT; i++)
         p->g[i] = song.g[i];
     p->sel = song.sel;
-    p->parts = NPART;
+    p->parts = PROJ_PARTS;
     p->phys = PROJ_PHYS;
     p->chain = chain_config;
     for (i = 0; i < NTRK; i++) {
@@ -835,6 +1081,22 @@ static void project_capture(project_t *p)
     motion_unguard(f);
     memcpy(p->name, proj_name, str_len(proj_name));
     p->sum = proj_sum(p);
+}
+#if !FELUCCA_FLASH
+/* a build without flash (host tests): the slots' NSH1 records in RAM, as their FUN10 records (proj_slot) */
+static project_store_t proj_hi_ram[4] __attribute__((section(".pool")));
+#endif
+/* slot's project, all eight tracks (tracks 5..8 from flash: the RAM cache holds the FUN10 records) -> q; 0 = empty */
+static int proj_get_slot(project_t *q, uint32_t slot)
+{
+    if (!proj_import(q, &proj_slot[slot & 3u], sizeof(project_store_t)))
+        return 0;
+#if FELUCCA_FLASH
+    proj_hi_fetch(q, OBJ_PROJHI0 + (slot & 3u));
+#else
+    proj_hi_apply(q, proj_hi_ram[slot & 3u].raw, sizeof(project_store_t));
+#endif
+    return 1;
 }
 
 /* the music as it is now -> slot, named `name` (0: the current name; "" none); 0 saved, nonzero refused or failed.
@@ -852,12 +1114,17 @@ static int project_save_as(uint32_t slot, const char *name)
         memcpy(p->name, name, str_len(name) < PROJ_NAME_LEN ? str_len(name) : PROJ_NAME_LEN);
     }
     proj_wire_gen++;
+#if FELUCCA_FLASH
     if (!proj_pack(&proj_wire, p)) { ui_message("SAVE FORMAT ERROR"); return 2; }
+#else
+    if (!proj_pack_pair(&proj_wire, &proj_hi_ram[slot & 3u], p)) { ui_message("SAVE FORMAT ERROR"); return 2; }
+#endif
 
 #if FELUCCA_FLASH
     if (flash_ok) {
-        if (st_save(OBJ_PROJECT0 + (slot & 3u), &proj_wire, sizeof proj_wire)) {
-            ui_message("SAVE ERROR");
+        int rc = proj_save_pair(p, OBJ_PROJECT0 + (slot & 3u), OBJ_PROJHI0 + (slot & 3u));
+        if (rc) {
+            ui_message(rc == -100 ? "SAVE FORMAT ERROR" : "SAVE ERROR");
             return 2;
         }
         memcpy(&proj_slot[slot & 3u], &proj_wire, sizeof proj_wire);
@@ -920,7 +1187,8 @@ static int project_info(uint32_t slot, char *b, uint16_t *len48, uint32_t *den, 
         memset(den, 0, NTRK * sizeof *den);
         memset(n, 0, NTRK);
     }
-    if (!proj_import(&proj_scratch, &proj_slot[slot & 3u], sizeof(project_store_t)))
+    if (!(len48 || den ? proj_get_slot(&proj_scratch, slot) :
+          proj_import(&proj_scratch, &proj_slot[slot & 3u], sizeof(project_store_t))))
         return 0;
     proj_name_get(b, (const uint8_t *)proj_scratch.name);
     for (k = 0; len48 && k < NTRK; k++)
@@ -940,7 +1208,7 @@ static int project_rename(uint32_t slot, const char *name)
         ui_message("STOP TO SAVE");
         return 1;
     }
-    if (!proj_import(p, &proj_slot[slot & 3u], sizeof(project_store_t))) {
+    if (!proj_get_slot(p, slot)) {
         ui_message("EMPTY SLOT");
         return 1;
     }
@@ -949,7 +1217,7 @@ static int project_rename(uint32_t slot, const char *name)
     proj_wire_gen++;
     if (!proj_pack(&proj_wire, p)) { ui_message("SAVE FORMAT ERROR"); return 2; }
 #if FELUCCA_FLASH
-    if (flash_ok && st_save(OBJ_PROJECT0 + (slot & 3u), &proj_wire, sizeof proj_wire)) {
+    if (flash_ok && proj_save_pair(p, OBJ_PROJECT0 + (slot & 3u), OBJ_PROJHI0 + (slot & 3u))) {
         ui_message("SAVE ERROR");
         return 2;
     }
@@ -1045,7 +1313,7 @@ static void project_load(uint32_t slot)
 #if FELUCCA_FLASH
     if (flash_ok && !proj_import(&proj_scratch, &proj_slot[slot & 3u], sizeof(project_store_t))) proj_fetch(slot);
 #endif
-    if (!proj_import(&proj_scratch, &proj_slot[slot & 3u], sizeof(project_store_t))) { ui_message("EMPTY SLOT"); return; }
+    if (!proj_get_slot(&proj_scratch, slot)) { ui_message("EMPTY SLOT"); return; }
     proj_bound(&proj_scratch);                          /* a retained RAM slot of an older format: as from flash */
     if (!project_restore_runtime(&proj_scratch)) {
         proj_cur = (uint8_t)(slot & 3u);
@@ -1122,7 +1390,7 @@ static uint32_t chain_prepare(void)
     for (i = 0; i < 4u; i++)
         if ((used >> i) & 1u) {
             project_t *p = &proj_scratch;
-            if (!proj_import(p, &proj_slot[i], sizeof(project_store_t))) return 3u + i;
+            if (!proj_get_slot(p, i)) return 3u + i;
             chain.source[i].motion = p->motion;
             /* A song keeps its current instruments. Engine-specific motion from
              * another instrument would change a kit/wave/algorithm unexpectedly. */
@@ -1278,8 +1546,7 @@ static void autosave_poll(void)
     as.last = fm1_ms;
     as.wrote = 1;
     project_capture(&proj_scratch);
-    proj_wire_gen++;
-    as.err = !proj_pack(&proj_wire, &proj_scratch) || st_save(OBJ_AUTOSAVE, &proj_wire, sizeof proj_wire) != 0;
+    as.err = proj_save_pair(&proj_scratch, OBJ_AUTOSAVE, OBJ_AUTOHI) != 0;
     if (!as.err) {
         as.saved = sig;
         as.writes++;
@@ -1299,6 +1566,7 @@ static int autosave_boot(int allowed)
         proj_wire_gen++;
         n = st_load(OBJ_AUTOSAVE, &proj_wire, sizeof proj_wire);
         if (n > 0 && proj_import(&proj_scratch, &proj_wire, n)) {
+            proj_hi_fetch(&proj_scratch, OBJ_AUTOHI);
             proj_bound(&proj_scratch);
             if (!project_restore_runtime(&proj_scratch)) {
                 ui_message("RESTORED");

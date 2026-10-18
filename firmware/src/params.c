@@ -45,7 +45,7 @@ static const char *const N_ORDER[] = {"NOTE", "PLAY"};
 static const char *const N_CLOCK[] = {"INT", "USB", "TRS"};
 static const char *const N_MIDI_INPUT[] = {"USB", "TRS"};
 /* MIDI IN (seq.c midi_base): 1..4 -> parts, 5..16 ignored / all -> selected / (1.2, append-only) 5..8, 9..12, 13..16 -> parts */
-static const char *const N_ROUTE[] = {"CH1-4", "SEL", "CH5-8", "CH9-12", "CH13-16"};
+static const char *const N_ROUTE[] = {"CH1-8", "SEL", "CH5-12", "CH9-16", "CH13-16"};   /* (NightShift: eight tracks) */
 static const char *const N_NOTE[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 static const char *const N_DASH[] = {"--"};
 static const char *const N_RTYPE[] = {"ROOM", "SPRING", "HALL"};   /* G_RTYPE: the reverb bus's model (fx.c) */
@@ -246,7 +246,7 @@ static int32_t enum_orig(const param_desc_t *d, int32_t v)
 {
     if (d->names == N_DRUM_KIT)
         return v >= 0 && v < DK_COUNT ? (int32_t)DK_PLAYS[v] : v;
-    return d->names == SMP_ALL_NAMES && v >= 0 && v < SMP_NSETS ? SMP_SET_ORIG[v] : v;
+    return d->names == SMP_ALL_NAMES && v >= 0 && v < (int32_t)NELEM(SMP_SET_ORIG) ? SMP_SET_ORIG[v] : v;
 }
 
 /* a stored value as the parameter takes it (projects, user presets, motion): inside d's range, and a retired

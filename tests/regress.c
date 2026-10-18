@@ -573,7 +573,7 @@ static int chk_cap_mode_budget(char *msg, uint32_t n)
     uint32_t round, p, i, bad = 0, worst = 0;
     for (round = 0; round < NELEM(MODE); round++) {
         host_tracks_init();
-        for (p = 0; p < NPART; p++) {
+        for (p = 0; p < NTRK_V4; p++) {
             memset(trk[p].v, 0, sizeof trk[p].v);
             host_preset(&trk[p], 0, 0);
             trk[p].p[P_VOICE] = p ? V_MONO : V_POLY;
@@ -590,7 +590,7 @@ static int chk_cap_mode_budget(char *msg, uint32_t n)
             for (i = 1; i < trk_nvoice(&trk[0]); i++)
                 voice_kill(&trk[0].v[i]);
         }
-        for (p = 1; p < NPART; p++) {
+        for (p = 1; p < NTRK_V4; p++) {
             trk_note_on(&trk[p], 70u + p * 3u, 100);
             i = voices_busy();
             worst = i > worst ? i : worst;
@@ -603,9 +603,9 @@ static int chk_cap_mode_budget(char *msg, uint32_t n)
         bad += i > NVOICE || !trk[0].v[0].gate;
         blk();
         bad += voices_busy() > NVOICE || !trk[0].v[0].gate;
-        for (p = 1; p < NPART; p++)
+        for (p = 1; p < NTRK_V4; p++)
             bad += !trk[p].v[0].gate;
-        for (p = 0; p < NPART; p++)
+        for (p = 0; p < NTRK_V4; p++)
             trk_all_off(&trk[p]);
         for (i = 0; i < 4u * FS / CTL && !parts_free(); i++)
             blk();
@@ -614,6 +614,47 @@ static int chk_cap_mode_budget(char *msg, uint32_t n)
     snprintf(msg, n, "POLY -> MONO / LEGATO and lower UNISON cap: at most %u voices, all four leads kept, all released",
              worst);
     return !bad;
+}
+/* NightShift: eight parts, each holding a MONO lead (every voice of the budget protected), then a ninth note: it sounds,
+ * the budget holds, and the voice given up is another part's lead (the oldest: part 1's), never one of its own */
+static int rg_gate(const track_t *t, uint32_t note)
+{
+    uint32_t i;
+    for (i = 0; i < NVOICE; i++)
+        if (t->v[i].active && t->v[i].gate && t->v[i].note == note)
+            return 1;
+    return 0;
+}
+static int chk_eight_leads(char *msg, uint32_t n)
+{
+    uint32_t p, i, bad = 0, busy;
+    host_tracks_init();
+    for (p = 0; p < NPART; p++) {
+        memset(trk[p].v, 0, sizeof trk[p].v);
+        host_preset(&trk[p], 0, 0);
+        trk[p].p[P_VOICE] = V_MONO;
+        trk[p].p[P_AMODE] = 0;
+        trk[p].p[P_SUS] = 127;
+        trk_note_on(&trk[p], 40u + p * 3u, 100);
+        blk();
+    }
+    busy = voices_busy();
+    bad += busy != NVOICE;
+    trk[NPART - 1u].p[P_VOICE] = V_POLY;
+    trk_note_on(&trk[NPART - 1u], 90, 100);
+    blk();
+    bad += voices_busy() > NVOICE || !rg_gate(&trk[NPART - 1u], 90) || !rg_gate(&trk[NPART - 1u], 40u + (NPART - 1u) * 3u);
+    bad += trk[0].v[0].gate;                            /* (part 1's lead, the oldest, given up) */
+    for (p = 1; p + 1u < NPART; p++)
+        bad += !trk[p].v[0].gate;
+    for (p = 0; p < NPART; p++)
+        trk_all_off(&trk[p]);
+    for (i = 0; i < 4u * FS / CTL && !parts_free(); i++)
+        blk();
+    bad += !parts_free();
+    snprintf(msg, n, "eight parts' leads fill the budget; a ninth note takes the oldest other lead, at most %u voices",
+             (unsigned)NVOICE);
+    return bad == 0;
 }
 
 /* A live mode change can leave an old chord in slots above the new lead. */
@@ -1085,6 +1126,7 @@ int main(int argc, char **argv)
     add(J_CHECK, "voices: reuse before the stolen tail fades")->check = chk_retrigger_budget;
     add(J_CHECK, "voices: budget after a live mode change")->check = chk_mode_budget;
     add(J_CHECK, "voices: budget after voice mode changes")->check = chk_cap_mode_budget;
+    add(J_CHECK, "voices: eight leads (NightShift)")->check = chk_eight_leads;
     add(J_CHECK, "voices: note-offs after live voice mode changes")->check = chk_mode_release;
     add(J_CHECK, "samples: high-rate one-shot ends")->check = chk_sample_end;
     add(J_CHECK, "voices: a stolen voice fades")->check = chk_steal_fade;

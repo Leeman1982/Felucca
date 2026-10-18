@@ -525,6 +525,7 @@ const parse = {
     const r = new Reader(a);
     const o = { nslots: r.b(), slotKiB: r.b(), slots: [] };
     for (let i = 0; i < o.nslots; i++) o.slots.push({ zones: r.b(), name: r.s(), kib: r.b() });
+    for (const u of o.slots) u.roomKiB = r.i < a.length ? r.b() : o.slotKiB;   /* NightShift: each slot's room (USR3 40) */
     return o;
   },
   [CMD.UP_LIST](a) {
@@ -810,6 +811,9 @@ function fmtValue(d, v) {
    byte for byte: web/test_web.mjs compares them. */
 const SMP = { SLOT_SIZE: 0x14000, DATA_OFF: 512, RATE: 22050, HDR_LEN: 32 + 16 * 28, MAX_ZONES: 16 };
 SMP.MAX_DATA = SMP.SLOT_SIZE - SMP.DATA_OFF;
+SMP.ROOM = [SMP.SLOT_SIZE, SMP.SLOT_SIZE, 0xA000];   /* NightShift: USR3 holds 40 KiB (its upper half: tracks 5..8) */
+/* slot k's room for ADPCM data: the device's SMP_INFO, else Felucca's 80 KiB */
+const smpMax = (k, d = dev) => (d && d.smp && d.smp.slots[k] ? d.smp.slots[k].roomKiB * 1024 : SMP.SLOT_SIZE) - SMP.DATA_OFF;
 
 /* groups of up to 7 bytes, each preceded by their top bits */
 function pack7(b) {
@@ -979,7 +983,7 @@ function rootFromName(name) {
 }
 
 /* zones: [{s: Int16Array (22050 Hz), root, lo?, hi?}] -> {hdr (480 B), data, zones} (sampleio.user_slot) */
-function buildSlot(name, zonesIn) {
+function buildSlot(name, zonesIn, max = SMP.MAX_DATA) {
   const zones = [], parts = [];
   let len = 0;
   for (const z of zonesIn) {
@@ -991,7 +995,7 @@ function buildSlot(name, zonesIn) {
   const data = new Uint8Array(len);
   let o = 0;
   for (const p of parts) { data.set(p, o); o += p.length; }
-  if (len > SMP.MAX_DATA) throw new Error(`too long: ${len} B (max ${SMP.MAX_DATA} B)`);
+  if (len > max) throw new Error(`too long: ${len} B (max ${max} B)`);
   if (!zones.length || zones.length > SMP.MAX_ZONES) throw new Error("1..16 files per slot");
   zones.sort((a, b) => a.root - b.root);
   zones.forEach((z, j) => {
@@ -1684,7 +1688,7 @@ function makeMockDevice(opt = {}) {
     D("BPM", F.BPM, 40, 240, 120), D("SWG", F.PCT, 0, 100, 0), E("CLK", ["INT", "USB", "TRS"], 0), D("TUNE", F.INT, -50, 50, 0),
     E("TIME", NDIV, 1), D("FDBK", F.PCT, 0, 120, 60), D("COLR", F.PCT, 0, 127, 70), D("MIX", F.PCT, 0, 127, 90),
     D("SIZE", F.PCT, 0, 127, 90), D("DAMP", F.PCT, 0, 127, 60), D("CRT", F.LFOHZ, 0, 127, 40), D("CDP", F.PCT, 0, 127, 60),
-    E("MIDI", ["USB", "TRS"], 0), E("SYNC", NDASH, 0), E("ROUT", ["CH1-4", "SEL", "CH5-8", "CH9-12", "CH13-16"], 0), D("CPU", F.INT, 0, 0, 0),
+    E("MIDI", ["USB", "TRS"], 0), E("SYNC", NDASH, 0), E("ROUT", ["CH1-8", "SEL", "CH5-12", "CH9-16", "CH13-16"], 0), D("CPU", F.INT, 0, 0, 0),
     D("SLOT", F.INT, 1, 4, 1), E("NAME", NDASH, 0), E("LOAD", NGO, 0), E("SAVE", NGO, 0),
     E("ENG", ["ANALOG", "-", "PHASE", "LOFI", "SAMPLE", "VOICE", "TRIO", "WHEEL",
       "GRAIN", "PHYS", "DRUM", "NOISE", "FM6", "SLICE"], 0), E("SET", NGO, 0),
@@ -1695,6 +1699,7 @@ function makeMockDevice(opt = {}) {
   const NONE = D("-", F.INT, 0, 0, 0);
   const RATIO = [".5", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "14", "16"];
   const P = (name, e, env = [10, 70, 90, 60], mono = 0, pat = 0) => ({ name, e, env, mono, pat });
+  const SMP_SETS = ["PIANO", "PIANO", "FLUTE", "SAX", "PIANO", "USR1", "USR2", "USR3", "101 BASS", "4P BASS", "JUNO STR", "LINN"];
   const ENG = [
     { name: "ANALOG", titles: ["OSC", "FLT"], edit: [E("WAVE", ["SAW", "SQR", "TRI", "SIN", "PWM", "SYNC", "SUB"], 0), D("DTN", F.INT, 0, 127, 10, null, "ct"), D("MIX", F.PCT, 0, 127, 64),
         D("NOIS", F.PCT, 0, 127, 0), D("CUT", F.CUTOFF, 0, 127, 90), D("RES", F.PCT, 0, 127, 30), D("DRV", F.PCT, 0, 127, 0), D("KTR", F.PCT, 0, 127, 64)],
@@ -1719,10 +1724,13 @@ function makeMockDevice(opt = {}) {
       presets: [P("PULSE LD", [0, 0, 32, 0, 0, 20, 0, 127], [0, 60, 90, 30], 1, 4), P("WAVE BASS", [1, 1, 0, 0, 0, 0, 0, 90], [0, 50, 70, 20], 1, 2),
         P("ARP 8BIT", [2, 0, 96, 0, 0, 0, 2, 110], [0, 60, 80, 40], 0, 13), P("WAVE LEAD", [0, 4, 92, 0, 0, 18, 0, 110], [0, 70, 90, 30], 1, 3),
         P("STEP LEAD", [4, 0, 40, 34, 0, 16, 0, 127], [0, 64, 127, 55], 1, 4)] },
-    { name: "SAMPLE", titles: ["SET", "TONE"], edit: [E("SET", ["PIANO", "PIANO", "FLUTE", "SAX", "PIANO", "USR1", "USR2", "USR3"], 0), D("TUNE", F.SEMI, -24, 24, 0), D("BITS", F.INT, 0, 127, 0),
+    { name: "SAMPLE", titles: ["SET", "TONE"], edit: [E("SET", SMP_SETS, 0), D("TUNE", F.SEMI, -24, 24, 0), D("BITS", F.INT, 0, 127, 0),
         E("LOOP", NONOFF, 1), D("CUT", F.INT, 0, 127, 127), NONE, D("DRV", F.PCT, 0, 127, 0), NONE],
       presets: [P("PIANO", [0, 0, 0, 1, 127, 0, 0, 0], [0, 127, 127, 70]), P("PIANO", [0, 0, 0, 1, 127, 0, 0, 0], [0, 127, 127, 70]),
-        P("FLUTE", [2, 0, 0, 1, 127, 0, 0, 0], [12, 80, 120, 60]), P("SAX", [3, 0, 0, 1, 127, 0, 0, 0], [12, 80, 120, 60])] },
+        P("FLUTE", [2, 0, 0, 1, 127, 0, 0, 0], [12, 80, 120, 60]), P("SAX", [3, 0, 0, 1, 127, 0, 0, 0], [12, 80, 120, 60]),
+        P("PIANO", [0, 0, 0, 1, 127, 0, 0, 0], [0, 127, 127, 70]), P("101 BASS", [8, 0, 0, 1, 127, 0, 0, 0], [0, 82, 112, 18], 1, 2),
+        P("101 PLUCK", [8, 0, 0, 1, 110, 0, 18, 0], [0, 52, 0, 16], 1, 1), P("4P BASS", [9, 0, 0, 1, 127, 0, 0, 0], [0, 90, 118, 22], 1, 8),
+        P("JUNO STR", [10, 0, 0, 1, 127, 0, 0, 0], [44, 80, 120, 70], 0, 5), P("SLOW STR", [10, 0, 0, 1, 104, 0, 0, 0], [84, 90, 124, 92], 0, 5)] },
     { name: "VOICE", titles: ["VOWL", "TONE"], edit: [D("VOWL", F.INT, 0, 127, 0), D("VOWL2", F.INT, 0, 127, 64), D("TALK", F.TIME, 0, 127, 0),
         D("SHIFT", F.SEMI, -12, 12, 0), D("BUZZ", F.PCT, 0, 127, 64), D("BRTH", F.PCT, 0, 127, 10), D("Q", F.PCT, 0, 127, 64), D("RAND", F.PCT, 0, 127, 0)],
       presets: [P("CHOIR AAH", [0, 0, 0, 0, 40, 22, 60, 0], [85, 90, 115, 95], 0, 5), P("VOX LEAD", [32, 0, 0, 2, 90, 8, 72, 0], [6, 70, 105, 55], 1, 4),
@@ -1739,7 +1747,7 @@ function makeMockDevice(opt = {}) {
       presets: [P("FULL ORGAN", [15, 0, 0, 0, 0, 30, 20, 1], [0, 64, 127, 45], 0, 5), P("JAZZ PERC", [4, 0, 0, 0, 2, 50, 8, 1], [0, 64, 127, 40], 0, 3),
         P("GOSPEL", [6, 0, 0, 0, 1, 60, 40, 2], [0, 64, 127, 45], 0, 6), P("SOFT FLUTE", [1, 0, -2, 0, 0, 10, 0, 1], [0, 64, 127, 55], 0, 5),
         P("ROCK DRIVE", [7, 0, 0, 0, 0, 70, 100, 2], [0, 64, 127, 40], 0, 4)] },
-    { name: "GRAIN", titles: ["GRAN", "SPRY"], edit: [E("SRC", ["PIANO", "PIANO", "FLUTE", "SAX", "PIANO", "USR1", "USR2", "USR3"], 0),
+    { name: "GRAIN", titles: ["GRAN", "SPRY"], edit: [E("SRC", SMP_SETS, 0),
         D("POS", F.PCT, 0, 127, 32), D("SIZE", F.PCT, 0, 127, 80), D("DENS", F.PCT, 0, 127, 80),
         D("PTCH", F.SEMI, -24, 24, 0), D("SPRD", F.PCT, 0, 127, 30), D("RAND", F.PCT, 0, 127, 10), D("TONE", F.PCT, 0, 127, 127)],
       presets: [P("CLOUD PAD", [2, 50, 92, 88, 0, 40, 14, 100], [70, 90, 120, 90], 0, 5), P("GLITCH", [3, 64, 24, 112, 0, 100, 90, 127], [0, 70, 100, 30], 0, 4),
@@ -1752,10 +1760,11 @@ function makeMockDevice(opt = {}) {
         P("KALIMBA", [0, 34, 16, 56, 100, 90, 0, 48], [0, 100, 127, 60], 0, 7), P("HAND DRUM", [2, 112, 76, 56, 44, 100, 14, 24], [0, 100, 127, 64], 0, 6),
         P("TOMS", [2, 0, 52, 40, 30, 100, 40, 30], [0, 100, 127, 70], 0, 2), P("DRONE STRING", [3, 127, 80, 88, 64, 100, 92, 0], [0, 100, 127, 90], 0, 3),
         P("HARP", [3, 8, 62, 74, 60, 90, 0, 0], [0, 100, 127, 80], 0, 3)] },
-    { name: "DRUM", titles: ["KIT", "HIT"], edit: [E("KIT", ["STD", "66", "10", "77", "80", "10", "66", "55", "77"], 0), D("TUNE", F.PCT, 0, 127, 64),
+    { name: "DRUM", titles: ["KIT", "HIT"], edit: [E("KIT", ["STD", "66", "10", "77", "80", "10", "66", "55", "77", "LINN"], 0), D("TUNE", F.PCT, 0, 127, 64),
         D("TONE", F.PCT, 0, 127, 64), D("DECY", F.PCT, 0, 127, 64), D("SNAP", F.PCT, 0, 127, 64), D("ACC", F.PCT, 0, 127, 100),
         E("KICK", ["PUNCH", "ROUND"], 0), D("DRV", F.PCT, 0, 127, 0)],
-      presets: [P("DRUM KIT", [0, 64, 70, 64, 64, 100, 0, 0], [0, 100, 127, 100], 0, 12)] },
+      presets: [P("DRUM KIT", [0, 64, 70, 64, 64, 100, 0, 0], [0, 100, 127, 100], 0, 12),
+        P("LINN KIT", [9, 64, 64, 64, 64, 100, 0, 0], [0, 100, 127, 100], 0, 12)] },
     { name: "NOISE", titles: ["SRC", "MOVE"], edit: [E("MODE", ["ANLG", "DUST", "LFSR", "META"], 0), D("COLR", F.PCT, 0, 127, 64),
         D("FREQ", F.CUTOFF, 0, 127, 80), D("RES", F.PCT, 0, 127, 30), D("TRK", F.PCT, 0, 127, 64), D("DENS", F.PCT, 0, 127, 0),
         D("DRFT", F.PCT, 0, 127, 0), D("CRSH", F.PCT, 0, 127, 0)],
@@ -1806,13 +1815,13 @@ function makeMockDevice(opt = {}) {
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const enumOrig = (d, v) => d.fmt === F.ENUM && d.names ? aliasOf(d.names, v - d.min) + d.min : v;   /* params.c enum_orig */
   /* four tracks (firmware v3), four synth parts (1.0); engine / preset / p / step below are the selected track's */
-  const NTRK = 4;
+  const NTRK = 8;
   const newTrack = () => ({ engine: 0, preset: 0, fm6: FM6.INIT_PK.slice(),
     p: TP.map((d) => d.def).concat(new Array(8).fill(0)),
     motion: {on: true, events: []},
     step: Array.from({ length: NSTEP }, () => ({ chance: 100, ratchet: 1, n: 0, notes: [0, 0, 0, 0], time: 2, flags: 0, vel: 0, hit: 0, acc: 0 })) });
   const st = {
-    tracks: [0, 1, 2, 3].map(newTrack), sel: 0, rec: 0,
+    tracks: [0, 1, 2, 3, 4, 5, 6, 7].map(newTrack), sel: 0, rec: 0,
     g: GP.map((d) => d.def),
     slots: [null, null, null, null], songRows: [], chainPlaying: false, chainRow: 0, chainRemaining: 0,
     smp: [0, 1, 2].map(() => ({ flash: new Uint8Array(SMP.SLOT_SIZE).fill(0xFF), zones: 0, name: "", len: 0, next: SMP.DATA_OFF })),
@@ -1918,8 +1927,9 @@ function makeMockDevice(opt = {}) {
     st.bank[slot] = snapshot(name);
     clearSteps(); st.p[29] = 16;
   });
-  /* the power-on sounds (engines.c TRK_DEF): ACID, PAD, PULSE LD, DRUM KIT */
-  [[1, FM6_E, 4], [2, 3, 0], [3, 10, 0], [0, 0, 4]].forEach(([i, e, p]) => { st.sel = i; setEngine(e); applyPreset(p); });
+  /* the power-on sounds (engines.c TRK_DEF): ACID, PAD, PULSE LD, DRUM KIT; NightShift's 5..8: 101 BASS, JUNO STR,
+     LINN KIT, the default */
+  [[1, FM6_E, 4], [2, 3, 0], [3, 10, 0], [4, 4, 5], [5, 4, 8], [6, 10, 1], [7, 0, 0], [0, 0, 4]].forEach(([i, e, p]) => { st.sel = i; setEngine(e); applyPreset(p); });
   /* the device powers on with its sequencers empty; the mock starts as a little demo to look at: track 1 with
      the ACID pattern, track 4 with BEAT (as SAVE > PHRASES would load them), pads left, lead right */
   st.sel = 3; loadPattern(11);
@@ -2239,7 +2249,7 @@ function makeMockDevice(opt = {}) {
         if (a.length < 5 || a[0] >= 3) return null;
         const u = st.smp[a[0]], off = a[1] | (a[2] << 7) | (a[3] << 14), dat = unpack7(a.slice(4));
         let rc = 0;
-        if (off < SMP.DATA_OFF || (off & 0xFF) || !dat.length || off + dat.length > SMP.SLOT_SIZE || dat.length > 256) rc = 1;
+        if (off < SMP.DATA_OFF || (off & 0xFF) || !dat.length || off + dat.length > SMP.ROOM[a[0]] || dat.length > 256) rc = 1;
         else {
           if (!(off & 0xFFF)) u.flash.fill(0xFF, off, off + 4096);
           u.flash.set(dat, off);
@@ -2256,7 +2266,7 @@ function makeMockDevice(opt = {}) {
         else if (!hd[6] || hd[6] > 16) rc = 5;
         else {
           const len = dv.getUint32(16, true);
-          if (len > SMP.MAX_DATA) rc = 1;
+          if (len > SMP.ROOM[a[0]] - SMP.DATA_OFF) rc = 1;
           else if (crc32(u.flash.subarray(SMP.DATA_OFF, SMP.DATA_OFF + len)) !== dv.getUint32(20, true)) rc = 3;
           else {
             u.flash.set(hd, 0);
@@ -2270,6 +2280,7 @@ function makeMockDevice(opt = {}) {
       case CMD.SMP_INFO:
         b(3); b(SMP.SLOT_SIZE / 1024);
         st.smp.forEach((u) => { b(u.zones); s(u.zones ? u.name : ""); b(u.zones ? Math.ceil(u.len / 1024) : 0); });
+        SMP.ROOM.forEach((n) => b(n / 1024));
         break;
       default:
         return null;
@@ -3637,7 +3648,7 @@ async function listInputs() {
 let recStarting = false, recEpoch = 0;               /* cancel a pending permission / worklet on leave */
 const recActive = () => !!rec || recStarting;       /* the draft must not change: Upload, files, trims off */
 async function recStart(k) {
-  const d = smpDraft[k], left = SMP.MAX_DATA - draftBytes(d);   /* bytes: two samples each */
+  const d = smpDraft[k], left = smpMax(k) - draftBytes(d);   /* bytes: two samples each */
   if (!dev || tab !== "samples" || rec || recStarting || smpBusy) return;
   const session = dev, epoch = ++recEpoch;
   const current = () => epoch === recEpoch && dev === session && tab === "samples";
@@ -3898,11 +3909,10 @@ function recRow(k) {
 function renderSamples() {
   const box = $("smpslots");                        /* the tab says when there are no slots (renderPanels) */
   if (!dev || !dev.smp) { box.replaceChildren(); return; }
-  const max = SMP.MAX_DATA;
   box.replaceChildren(...dev.smp.slots.map((u, k) => {
-    const d = smpDraft[k];
+    const d = smpDraft[k], max = smpMax(k);
     const status = u.zones ? `${u.name || "—"}, ${u.zones} ${t("zones")}, ${u.kib} KiB` : t("empty");
-    const bar = el("progress", { max: dev.smp.slotKiB, value: u.kib, title: `${u.kib} / ${dev.smp.slotKiB} KiB` });
+    const bar = el("progress", { max: u.roomKiB, value: u.kib, title: `${u.kib} / ${u.roomKiB} KiB` });
     const file = el("input", { type: "file", accept: ".wav,audio/wav,audio/x-wav,audio/*", multiple: true, hidden: true });
     file.addEventListener("change", () => { addFiles(k, [...file.files]); file.value = ""; });
     const name = el("input", { type: "text", class: "name", maxlength: 8, value: d.name, spellcheck: "false", placeholder: "NAME" });
@@ -3968,7 +3978,7 @@ async function smpInfo(d = dev) { d.smp = parse[CMD.SMP_INFO](await sessionReque
 async function smpUpload(k, prog) {
   const d = smpDraft[k];
   let built;
-  try { built = buildSlot(d.name, d.files.map((f) => ({ s: f.s, root: f.root }))); }
+  try { built = buildSlot(d.name, d.files.map((f) => ({ s: f.s, root: f.root })), smpMax(k)); }
   catch (e) { sayK("smpFail", e.message); return; }
   if (!confirm(t("confirmUpload").replace("{n}", k + 1))) return;
   const { hdr, data } = built;

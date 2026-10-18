@@ -76,11 +76,12 @@ static int compact_project(void)
     t->step[3] = (step_t){{60, 67}, 2, ST_NOTE, SF_ACCENT, 110, 0x81, 0x80, 0};
     step_set_chance(&t->step[3], 25); t->p[P_FM1_LEVEL] = 80; t->p[P_ED_FLT] = -50;
     motion_set_event(t, 3, P_REV, 110);
-    project_t before, after; project_store_t packed, corrupt;
+    project_t before, after; project_store_t packed, corrupt, packed_hi;
     project_capture(&before);
-    bad += check("FUN10 fits the retained and flash extent", sizeof(proj_slot) == 4u * 3840u && proj_pack(&packed, &before));
-    bad += check("FUN10 round trip preserves signed values/FM params/probability/motion", proj_import(&after, &packed, sizeof packed) &&
-        !memcmp(&before, &after, sizeof before));
+    bad += check("FUN10 fits the retained and flash extent", sizeof(proj_slot) == 4u * 3840u &&
+        proj_pack_pair(&packed, &packed_hi, &before));
+    bad += check("FUN10 round trip preserves signed values/FM params/probability/motion",
+        proj_import_pair(&after, &packed, &packed_hi) && !memcmp(&before, &after, sizeof before));
     corrupt = packed; corrupt.raw[112] ^= 1u;
     bad += check("FUN7 torn or corrupted payload is refused", !proj_import(&after, &corrupt, sizeof corrupt));
     corrupt = packed; corrupt.raw[68] = 255; uint32_t sum = proj_hash(corrupt.raw, sizeof corrupt - 4u);
@@ -90,8 +91,8 @@ static int compact_project(void)
     sum = proj_hash(corrupt.raw, sizeof corrupt - 4u); memcpy(corrupt.raw + sizeof corrupt - 4u, &sum, 4);
     bad += check("invalid probability is refused even with a correct hash", !proj_import(&after, &corrupt, sizeof corrupt));
     project_v6_t old; memset(&old, 0, sizeof old); old.magic = PROJ_MAGIC_V6; old.size = sizeof old;
-    memcpy(old.g, before.g, sizeof old.g); old.parts = NPART; old.phys = PROJ_PHYS;
-    for (uint32_t k = 0; k < NTRK; k++) {
+    memcpy(old.g, before.g, sizeof old.g); old.parts = PROJ_PARTS; old.phys = PROJ_PHYS;
+    for (uint32_t k = 0; k < NTRK_V4; k++) {
         for (uint32_t j = 0; j < 61u; j++) old.t[k].p[j] = before.t[k].p[j];
         for (uint32_t j = 0; j < 8u; j++) old.t[k].p[61u + j] = before.t[k].p[P_E0 + j];
         old.t[k].engine = before.t[k].engine; old.t[k].preset = before.t[k].preset;
@@ -120,7 +121,7 @@ static void pack_fun7_89(project_store_t *out, const project_t *q, const motion_
     uint8_t *b = out->raw; uint32_t pos = 68u, t, i, magic = PROJ_MAGIC, size = PROJ_STORE_SIZE, sum;
     memset(out, 0, sizeof *out); memcpy(b, &magic, 4); memcpy(b + 4, &size, 4);
     memcpy(b + 8, q->g, sizeof q->g); b[62] = q->sel; b[63] = q->parts; b[64] = q->phys; b[66] = 89;
-    for (t = 0; t < NTRK; t++) {
+    for (t = 0; t < NTRK_V4; t++) {
         for (i = 0; i < 89u; i++) b[pos++] = (uint8_t)(q->t[t].p[i < 81u ? i : P_E0 + i - 81u] + 64);
         b[pos++] = q->t[t].engine; b[pos++] = q->t[t].preset;
         for (i = 0; i < NSTEP; i++) {
@@ -130,8 +131,17 @@ static void pack_fun7_89(project_store_t *out, const project_t *q, const motion_
             b[pos++] = s->vel; b[pos++] = s->hit; b[pos++] = s->acc; b[pos++] = s->probability;
         }
     }
-    memcpy(b + pos, &q->chain, sizeof q->chain); pos += sizeof q->chain;
-    memcpy(b + pos, m, sizeof *m);
+    {   /* (FUN10's chain: four lanes a section; its motion: 3-byte records) */
+        chain_v10_t c;
+        memset(&c, 0, sizeof c);
+        c.count = q->chain.count;
+        for (i = 0; i < CHAIN_ROWS; i++) {
+            memcpy(c.row[i].slot, q->chain.row[i].slot, NTRK_V4);
+            c.row[i].repeat = q->chain.row[i].repeat;
+        }
+        memcpy(b + pos, &c, sizeof c); pos += sizeof c;
+    }
+    proj_motion_put(b + pos, m, 0);
     sum = proj_hash(b, PROJ_STORE_SIZE - 4u); memcpy(b + PROJ_STORE_SIZE - 4u, &sum, 4);
 }
 static int fun7_89(void)
@@ -152,7 +162,7 @@ static int fun7_89(void)
     m.event[2] = (motion_event_t){6, 61, 20};                      /* FM OP1 ATK: 61 then and now */
     pack_fun7_89(&old, &before, &m);
     ok = proj_import(&after, &old, sizeof old);
-    for (k = 0; ok && k < NTRK; k++) {
+    for (k = 0; ok && k < NTRK_V4; k++) {
         for (i = 0; i < 8u; i++) ok &= after.t[k].p[P_E0 + i] == before.t[k].p[P_E0 + i];
         for (i = 0; i < 81u; i++) ok &= after.t[k].p[i] == before.t[k].p[i];
         ok &= after.t[k].p[P_CHRD] == 0 && after.t[k].p[P_VOIC] == 0;
@@ -560,7 +570,7 @@ static int lock_project(void)
     bad += check("a project without locks: the bytes as before (ids < 128), the same round trip", ok);
     motion_set_lock(t, 2, P_REV, 101); motion_set_lock(t, 7, P_E4, 77);
     project_capture(&before);
-    ok = proj_pack(&a, &before) && proj_import(&after, &a, sizeof a) && !memcmp(&before, &after, sizeof before);
+    ok = proj_round_trip(&before, &after) && !memcmp(&before, &after, sizeof before);
     bad += check("FUN9 round trip keeps the locks (bit 7 of the id byte), their values and steps", ok &&
         after.motion.event[1].param == (P_REV | MOTION_LOCK) && after.motion.event[2].value == 77);
     project_save(2);
