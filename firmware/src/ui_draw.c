@@ -1199,7 +1199,7 @@ static void draw_columns(void)
 #define SPL_X0 ((240u - SPL_SQ) / 2u)               /* its top-left on the screen (x and y) */
 #define SPL_PAD 16                                  /* the text's inset: left (its ink), top and bottom (the capitals) */
 #define SPL_PITCH 20                                /* line to line */
-static const char *const SPLASH_LINES[] = {"NightShift", FELUCCA_VERSION, "Felucca by H\xFCgelton", "with community"};
+static const char *const SPLASH_LINES[] = {"NIGHTSHIFT", FELUCCA_VERSION, "Felucca by H\xFCgelton", "with community"};
                                                     /* (NightShift: an 8-track fork of Felucca, the maker's credit kept) */
 /* a band of two lines, h tall, at y on the screen: the first line's top at ly; the two lines' capitals declared
  * against al0..al1 (mode: AL_V the band centred there, AL_B the last baseline on al1) */

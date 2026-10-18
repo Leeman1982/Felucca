@@ -22,6 +22,15 @@ updater or **Return to official V15** takes you back).
 - **MIDI IN routing** (MENU > MIDI > ROUT): CH1-8 (default: channel n plays track n), SEL, CH5-12, CH9-16,
   CH13-16. MIDI out of a track whose channel would pass 16 is dropped. MIDI LEARN maps T1..T4 only.
 
+**Install (no Python):** `./build.sh` also writes **`build/NightShift-updater.html`**, one file with the firmware inside.
+Open it in Chrome or Edge (Windows, macOS, Linux, ChromeOS; not Safari or Firefox), plug the FM-1 in with a USB
+*data* cable, close every other program that uses MIDI, press **Install** and allow MIDI when asked; it takes a few
+minutes and the page says Done. In the same page, *Return to official V15* backs up and puts M-VAVE's firmware back
+(you pick your own unmodified `FM-1.fwsc`). With Python 3 (`pip install mido python-rtmidi`): `install-nightshift.bat`
+on Windows, or `python3 tools/fm1_install.py build/felucca.fwsc`. A cut-off install leaves the FM-1 in update mode:
+replug it and press the same button again. This is the Felucca installer with the package inside; it has been
+loaded in a browser, but no install has been run on a real FM-1.
+
 **The limits — read these:**
 
 - **The voice budget is still 8 voices** shared by all tracks (as Felucca's four). Eight busy tracks steal voices

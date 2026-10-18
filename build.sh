@@ -17,4 +17,7 @@ PY="${PYTHON:-python3}"
 if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
     docker info >/dev/null 2>&1 || { echo "build.sh: Docker is not running"; exit 1; }
 fi
-exec "$PY" tools/build.py "$@"
+"$PY" tools/build.py "$@"
+# NightShift: the one-file updater (build/NightShift-updater.html: the package inside, installs from Chrome / Edge)
+VER=$(sed -n 's/^#define FELUCCA_VERSION "\([^"]*\)".*/\1/p' firmware/src/felucca.c | head -1)
+"$PY" web/make_updater.py build/felucca.fwsc build/NightShift-updater.html --version "$VER"

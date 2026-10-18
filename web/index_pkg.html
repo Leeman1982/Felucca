@@ -147,9 +147,15 @@ window.addEventListener("beforeunload", (e) => { if (writing) { e.preventDefault
 (async () => {
   if (!navigator.requestMIDIAccess) { sayK("nomidi"); return; }
   try {
-    const r = await fetch(meta.pkg);
-    if (!r.ok) throw new Error(`${meta.pkg}: HTTP ${r.status}`);
-    const pkg = new Uint8Array(await r.arrayBuffer());
+    let pkg;
+    if (meta.data) {                                  /* the one-file updater (make_updater.py): the package is in the page */
+      pkg = Uint8Array.from(atob(meta.data), (c) => c.charCodeAt(0));
+      if (pkg.length !== meta.size) throw new Error("package size");
+    } else {
+      const r = await fetch(meta.pkg);
+      if (!r.ok) throw new Error(`${meta.pkg}: HTTP ${r.status}`);
+      pkg = new Uint8Array(await r.arrayBuffer());
+    }
     if (productOf(pkg) !== meta.product) { sayK("badpkg"); return; }
     image = logicalImage(pkg);
     say(`Felucca ${meta.version}`);
